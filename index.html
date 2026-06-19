@@ -404,6 +404,17 @@ function TetelReszletek({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onRe
   const [ujKezelesNyitva,setUjKezelesNyitva] = useState(false);
   const [ujAnalitikaNyitva,setUjAnalitikaNyitva] = useState(false);
   const [szerkesztesNyitva,setSzerkesztesNyitva] = useState(false);
+  const [torlesNyitva,setTorlesNyitva] = useState(false);
+  const [torles,setTorles] = useState(false);
+
+  const tetelTorles = async () => {
+    setTorles(true);
+    await sbDelete('tetelek', tetel.id);
+    setTorles(false);
+    setTorlesNyitva(false);
+    onVissza();
+    onReload();
+  };
 
   const load = useCallback(async ()=>{
     const [st, kz, an] = await Promise.all([
@@ -421,20 +432,47 @@ function TetelReszletek({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onRe
   const szin = BORFAJTA_SZIN[tetel.borfajta] || '#999';
 
   const lepesVegrehajt = async (irany) => {
-    const aktualisIdx = stadiumok.findIndex(s => !s.befejezve);
-    if(irany==='kovetkezo' && aktualisIdx>=0){
-      const most = new Date().toISOString();
-      await sbUpdate('tetel_stadiumok', stadiumok[aktualisIdx].id, {befejezve: most});
-      const kovetkezoIdx = aktualisIdx+1;
-      if(stadiumok[kovetkezoIdx]){
-        await sbUpdate('tetel_stadiumok', stadiumok[kovetkezoIdx].id, {elkezdve: most});
-        await sbUpdate('tetelek', tetel.id, {jelenlegi_stadium_sorrend: stadiumok[kovetkezoIdx].sorrend});
-      } else {
-        await sbUpdate('tetelek', tetel.id, {allapot:'palackozott'});
+    if(irany==='kovetkezo'){
+      const aktualisIdx = stadiumok.findIndex(s => !s.befejezve);
+      if(aktualisIdx>=0){
+        const most = new Date().toISOString();
+        await sbUpdate('tetel_stadiumok', stadiumok[aktualisIdx].id, {befejezve: most});
+        const kovetkezoIdx = aktualisIdx+1;
+        if(stadiumok[kovetkezoIdx]){
+          await sbUpdate('tetel_stadiumok', stadiumok[kovetkezoIdx].id, {elkezdve: most});
+          await sbUpdate('tetelek', tetel.id, {jelenlegi_stadium_sorrend: stadiumok[kovetkezoIdx].sorrend});
+        } else {
+          await sbUpdate('tetelek', tetel.id, {allapot:'palackozott'});
+        }
+        load(); onReload();
       }
-      load(); onReload();
+    } else if(irany==='vissza'){
+      // Ha a tétel már palackozott, az utolsó stádiumot nyitjuk vissza
+      if(tetel.allapot==='palackozott'){
+        const utolso = stadiumok[stadiumok.length-1];
+        if(utolso){
+          await sbUpdate('tetel_stadiumok', utolso.id, {befejezve: null});
+          await sbUpdate('tetelek', tetel.id, {allapot:'aktív', jelenlegi_stadium_sorrend: utolso.sorrend});
+        }
+        load(); onReload();
+        return;
+      }
+      const aktualisIdx = stadiumok.findIndex(s => !s.befejezve);
+      const elozoIdx = aktualisIdx >= 1 ? aktualisIdx-1 : (aktualisIdx===-1 ? stadiumok.length-1 : -1);
+      if(elozoIdx>=0 && stadiumok[elozoIdx]){
+        // Az előző stádiumot nyitjuk vissza (befejezve=null), a jelenlegit pedig elkezdve=null-ra állítjuk
+        await sbUpdate('tetel_stadiumok', stadiumok[elozoIdx].id, {befejezve: null});
+        if(aktualisIdx>=0 && stadiumok[aktualisIdx]){
+          await sbUpdate('tetel_stadiumok', stadiumok[aktualisIdx].id, {elkezdve: null});
+        }
+        await sbUpdate('tetelek', tetel.id, {jelenlegi_stadium_sorrend: stadiumok[elozoIdx].sorrend});
+        load(); onReload();
+      }
     }
   };
+
+  const aktualisStadiumIdx = stadiumok.findIndex(s => !s.befejezve);
+  const lehetVisszalepni = tetel.allapot==='palackozott' || aktualisStadiumIdx > 0;
 
   return (
     <main style={{flex:1, overflowY:'auto', padding:'24px 32px', background:'var(--cream)'}}>
@@ -465,6 +503,10 @@ function TetelReszletek({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onRe
               background:'transparent', border:'1px solid var(--line)', borderRadius:6,
               padding:'6px 12px', fontSize:12.5, fontWeight:600, cursor:'pointer', color:'var(--ink-soft)'
             }}>✎ Szerkesztés</button>
+            <button onClick={()=>setTorlesNyitva(true)} style={{
+              background:'transparent', border:'1px solid var(--line)', borderRadius:6,
+              padding:'6px 12px', fontSize:12.5, fontWeight:600, cursor:'pointer', color:'var(--wine)'
+            }}>🗑 Törlés</button>
             <div style={{
               background: tetel.allapot==='palackozott' ? 'var(--leaf)' : (tetel.allapot==='lezárt' ? 'var(--oak)' : szin),
               color:'#fff', fontSize:12, fontWeight:700, padding:'6px 14px', borderRadius:20, letterSpacing:'.03em'
@@ -495,14 +537,20 @@ function TetelReszletek({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onRe
         {/* Stádium progresszsáv - hordócsap stílusú jelölők */}
         <div style={{marginTop:26}}>
           <StadiumSav stadiumok={stadiumok} szin={szin} />
-          {tetel.allapot==='aktív' && (
-            <div style={{marginTop:16,display:'flex',justifyContent:'flex-end'}}>
+          <div style={{marginTop:16,display:'flex',justifyContent:'flex-end',gap:8}}>
+            {lehetVisszalepni && (
+              <button onClick={()=>lepesVegrehajt('vissza')} style={{
+                background:'transparent', color:'var(--ink-soft)', border:'1px solid var(--line)', borderRadius:6,
+                padding:'9px 16px', fontWeight:600, fontSize:13, cursor:'pointer'
+              }}>← Előző stádium</button>
+            )}
+            {tetel.allapot==='aktív' && (
               <button onClick={()=>lepesVegrehajt('kovetkezo')} style={{
                 background:'var(--ink)', color:'var(--cream)', border:'none', borderRadius:6,
                 padding:'9px 18px', fontWeight:600, fontSize:13, cursor:'pointer'
               }}>Következő stádium →</button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
 
@@ -554,6 +602,23 @@ function TetelReszletek({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onRe
           onClose={()=>setSzerkesztesNyitva(false)}
           onCreated={()=>{ onReload(); setSzerkesztesNyitva(false); }}
         />
+      )}
+      {torlesNyitva && (
+        <ModalShell title="Tétel törlése" onClose={()=>setTorlesNyitva(false)}>
+          <div style={{fontSize:14,marginBottom:18}}>
+            Biztosan törlöd a <b>{tetel.azonosito}</b> tételt? Ez véglegesen eltávolítja a hozzá tartozó összes stádiumot, kezelést, analitikai mérést és edény-tartalom rekordot is. <b>Ez nem vonható vissza.</b>
+          </div>
+          <div style={{display:'flex',gap:10}}>
+            <button onClick={()=>setTorlesNyitva(false)} style={{
+              flex:1, background:'transparent', border:'1px solid var(--line)', borderRadius:6,
+              padding:'11px', fontWeight:600, fontSize:14, cursor:'pointer', color:'var(--ink)'
+            }}>Mégse</button>
+            <button onClick={tetelTorles} disabled={torles} style={{
+              flex:1, background:'var(--wine)', color:'#fff', border:'none', borderRadius:6,
+              padding:'11px', fontWeight:700, fontSize:14, cursor:'pointer', opacity: torles ? .5 : 1
+            }}>{torles?'Törlés…':'Igen, törlöm'}</button>
+          </div>
+        </ModalShell>
       )}
     </main>
   );
