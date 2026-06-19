@@ -114,6 +114,7 @@ let rtCallback=null;
 
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
 
 <script type="text/babel" data-presets="react">
@@ -144,6 +145,7 @@ function App(){
   const [ujTetelNyitva,setUjTetelNyitva] = useState(false);
   const [szuro,setSzuro] = useState('mind');
   const [nezet,setNezet] = useState('tetelek'); // 'tetelek' | 'edenyek'
+  const [exportNyitva,setExportNyitva] = useState(false);
 
   const loadAll = useCallback(async ()=>{
     const [tArr, sablonArr, stadiumArr, anyagArr, edenyArr, tartalomArr] = await Promise.all([
@@ -178,7 +180,7 @@ function App(){
 
   return (
     <div style={{display:'flex',minHeight:'100vh',flexDirection:'column'}}>
-      <Header onUjTetel={()=>setUjTetelNyitva(true)} nezet={nezet} setNezet={setNezet} />
+      <Header onUjTetel={()=>setUjTetelNyitva(true)} onExport={()=>setExportNyitva(true)} nezet={nezet} setNezet={setNezet} />
       {nezet==='tetelek' ? (
         <div style={{display:'flex',flex:1,minHeight:0}}>
           <Sidebar
@@ -213,11 +215,17 @@ function App(){
           onCreated={(id)=>{ loadAll(); setKivalasztott(id); setUjTetelNyitva(false); }}
         />
       )}
+      {exportNyitva && (
+        <ExportModal
+          tetelek={tetelek}
+          onClose={()=>setExportNyitva(false)}
+        />
+      )}
     </div>
   );
 }
 
-function Header({onUjTetel,nezet,setNezet}){
+function Header({onUjTetel,onExport,nezet,setNezet}){
   return (
     <header style={{
       background:'var(--ink)', color:'var(--cream)', padding:'18px 24px',
@@ -241,6 +249,10 @@ function Header({onUjTetel,nezet,setNezet}){
             border:'none', borderRadius:6, padding:'7px 14px', fontWeight:600, fontSize:13, cursor:'pointer'
           }}>Edények</button>
         </div>
+        <button onClick={onExport} style={{
+          background:'transparent', color:'var(--cream)', border:'1px solid rgba(255,255,255,0.25)', borderRadius:6,
+          padding:'9px 14px', fontWeight:600, fontSize:13, cursor:'pointer'
+        }}>⬇ Export Excelbe</button>
         {nezet==='tetelek' && (
           <button onClick={onUjTetel} style={{
             background:'var(--must)', color:'var(--ink)', border:'none', borderRadius:6,
@@ -1259,6 +1271,206 @@ function primaryBtn(mentes){
     width:'100%', marginTop:4, background:'var(--ink)', color:'var(--cream)', border:'none',
     borderRadius:6, padding:'11px', fontWeight:700, fontSize:14, cursor:'pointer', opacity: mentes ? .5 : 1
   };
+}
+
+// ============================================================
+// EXCEL EXPORT
+// ============================================================
+function ExportModal({tetelek,onClose}){
+  const [evjaratSzuro,setEvjaratSzuro] = useState('mind');
+  const [allapotSzuro,setAllapotSzuro] = useState('mind');
+  const [generalas,setGeneralas] = useState(false);
+  const [hiba,setHiba] = useState('');
+
+  const evjaratok = Array.from(new Set(tetelek.map(t=>t.evjarat))).sort((a,b)=>b-a);
+
+  const szurtTetelek = tetelek.filter(t=>
+    (evjaratSzuro==='mind' || t.evjarat===parseInt(evjaratSzuro)) &&
+    (allapotSzuro==='mind' || t.allapot===allapotSzuro)
+  );
+
+  const generalExcel = async () => {
+    setGeneralas(true);
+    setHiba('');
+    try{
+      const tetelIdk = szurtTetelek.map(t=>t.id);
+      if(tetelIdk.length===0){ setHiba('Nincs a szűrésnek megfelelő tétel.'); setGeneralas(false); return; }
+      const idLista = tetelIdk.join(',');
+
+      const [stadiumokArr, kezelesekArr, analitikakArr, edenyTartalomArr, edenyMozgasokArr, edenyekArr, szarmazasArr] = await Promise.all([
+        sbSelect('tetel_stadiumok', `select=*&tetel_id=in.(${idLista})&order=sorrend.asc`),
+        sbSelect('kezelesek', `select=*,kezeloanyagok(nev,kategoria)&tetel_id=in.(${idLista})&order=datum.asc`),
+        sbSelect('analitikak', `select=*&tetel_id=in.(${idLista})&order=datum.asc`),
+        sbSelect('edeny_tartalom', `select=*,edenyek(nev,tipus)&tetel_id=in.(${idLista})`),
+        sbSelect('edeny_mozgasok', `select=*&tetel_id=in.(${idLista})&order=datum.asc`),
+        sbSelect('edenyek','select=*'),
+        sbSelect('tetel_szarmazas', `select=*&uj_tetel_id=in.(${idLista})`)
+      ]);
+
+      const stadiumok = stadiumokArr||[];
+      const kezelesek = kezelesekArr||[];
+      const analitikak = analitikakArr||[];
+      const edenyTartalom = edenyTartalomArr||[];
+      const edenyMozgasok = edenyMozgasokArr||[];
+      const edenyek = edenyekArr||[];
+      const szarmazas = szarmazasArr||[];
+
+      // --- Lap 1: Áttekintés ---
+      const attekintes = szurtTetelek.map(t=>{
+        const stT = stadiumok.filter(s=>s.tetel_id===t.id);
+        const aktualisStadium = stT.find(s=>!s.befejezve);
+        const elhelyezes = edenyTartalom.filter(e=>e.tetel_id===t.id)
+          .map(e=> `${(e.edenyek&&e.edenyek.nev)||'?'}${e.agazat?'/'+e.agazat:''} (${e.mennyiseg_liter} l)`).join('; ');
+        return {
+          'Azonosító': t.azonosito,
+          'Évjárat': t.evjarat,
+          'Szőlőfajta': t.fajta,
+          'Borfajta': t.borfajta,
+          'Dűlő': t.dulo||'',
+          'Állapot': t.allapot,
+          'Jelenlegi stádium': aktualisStadium ? aktualisStadium.nev : (t.allapot==='palackozott'?'Palackozva':''),
+          'Mennyiség (kg)': t.mennyiseg_kg||'',
+          'Mennyiség (liter)': t.mennyiseg_liter||'',
+          'Jelenlegi edény(ek)': elhelyezes,
+          'Megjegyzés': t.megjegyzes||'',
+          'Létrehozva': fmtDate(t.letrehozva)
+        };
+      });
+
+      // --- Lap 2: Stádium-történet ---
+      const stadiumSor = stadiumok.map(s=>{
+        const t = szurtTetelek.find(tt=>tt.id===s.tetel_id);
+        return {
+          'Tétel': t ? t.azonosito : '',
+          'Stádium': s.nev,
+          'Sorrend': s.sorrend,
+          'Elkezdve': s.elkezdve ? fmtDate(s.elkezdve) : '',
+          'Befejezve': s.befejezve ? fmtDate(s.befejezve) : ''
+        };
+      });
+
+      // --- Lap 3: Kezelések ---
+      const kezelesSor = kezelesek.map(k=>{
+        const t = szurtTetelek.find(tt=>tt.id===k.tetel_id);
+        return {
+          'Tétel': t ? t.azonosito : '',
+          'Dátum': fmtDate(k.datum),
+          'Stádium': k.stadium_nev||'',
+          'Típus': k.tipus,
+          'Kezelőanyag': (k.kezeloanyagok && k.kezeloanyagok.nev) || '',
+          'Mennyiség': k.mennyiseg||'',
+          'Mértékegység': k.mertekegyseg||'',
+          'Végezte': k.vegezte||'',
+          'Megjegyzés': k.megjegyzes||''
+        };
+      });
+
+      // --- Lap 4: Analitikák ---
+      const analitikaSor = analitikak.map(a=>{
+        const t = szurtTetelek.find(tt=>tt.id===a.tetel_id);
+        return {
+          'Tétel': t ? t.azonosito : '',
+          'Dátum': fmtDate(a.datum),
+          'Cukorfok': a.cukorfok!=null?a.cukorfok:'',
+          'pH': a.ph!=null?a.ph:'',
+          'Sav (g/l)': a.sav!=null?a.sav:'',
+          'SO2 szabad (mg/l)': a.so2_szabad!=null?a.so2_szabad:'',
+          'SO2 összes (mg/l)': a.so2_osszes!=null?a.so2_osszes:'',
+          'Alkohol (%)': a.alkohol!=null?a.alkohol:'',
+          'Hőmérséklet (°C)': a.homerseklet!=null?a.homerseklet:'',
+          'Megjegyzés': a.megjegyzes||''
+        };
+      });
+
+      // --- Lap 5: Edény-mozgások ---
+      const mozgasSor = edenyMozgasok.map(m=>{
+        const t = szurtTetelek.find(tt=>tt.id===m.tetel_id);
+        const forrasE = edenyek.find(e=>e.id===m.forras_edeny_id);
+        const celE = edenyek.find(e=>e.id===m.cel_edeny_id);
+        return {
+          'Tétel': t ? t.azonosito : '',
+          'Dátum': fmtDate(m.datum),
+          'Típus': m.tipus,
+          'Forrás edény': forrasE ? forrasE.nev : '',
+          'Cél edény': celE ? celE.nev : '',
+          'Mennyiség (liter)': m.mennyiseg_liter||'',
+          'Megjegyzés': m.megjegyzes||''
+        };
+      });
+
+      // --- Lap 6: Edények (jelenlegi állapot, teljes lista) ---
+      const edenySor = edenyek.map(e=>{
+        const tartalom = edenyTartalom.find(t=>t.edeny_id===e.id && tetelIdk.includes(t.tetel_id));
+        const t = tartalom ? szurtTetelek.find(tt=>tt.id===tartalom.tetel_id) : null;
+        return {
+          'Edény neve': e.nev,
+          'Típus': e.tipus,
+          'Kapacitás (liter)': e.kapacitas_liter,
+          'Helyszín': e.helyszin||'',
+          'Jelenlegi tartalom': t ? `${t.azonosito}${tartalom.agazat?'/'+tartalom.agazat:''}` : '',
+          'Mennyiség (liter)': tartalom ? tartalom.mennyiseg_liter : '',
+          'Megjegyzés': e.megjegyzes||''
+        };
+      });
+
+      // --- Lap 7: Származás (házasítások) ---
+      const szarmazasSor = szarmazas.map(s=>{
+        const ujT = szurtTetelek.find(tt=>tt.id===s.uj_tetel_id);
+        return {
+          'Új tétel': ujT ? ujT.azonosito : '',
+          'Forrás tétel ID': s.forras_tetel_id,
+          'Mennyiség (liter)': s.mennyiseg_liter||''
+        };
+      });
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(attekintes), 'Áttekintés');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(stadiumSor), 'Stádiumok');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(kezelesSor), 'Kezelések');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(analitikaSor), 'Analitikák');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(mozgasSor), 'Edény mozgások');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(edenySor), 'Edények');
+      if(szarmazasSor.length>0){
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(szarmazasSor), 'Származás (cuvée)');
+      }
+
+      const datumStr = new Date().toISOString().slice(0,10);
+      XLSX.writeFile(wb, `Pincekonyv_export_${datumStr}.xlsx`);
+      onClose();
+    }catch(e){
+      setHiba('Hiba történt az export közben: '+e.message);
+    }
+    setGeneralas(false);
+  };
+
+  return (
+    <ModalShell title="Export Excelbe" onClose={onClose}>
+      <div style={{fontSize:13,color:'var(--ink-soft)',marginBottom:16}}>
+        Az export 6-7 lapot tartalmaz: áttekintés, stádium-történet, kezelések, analitikák, edény-mozgások, edények és (ha van) származás. A szűrés csak az áttekintő lapra és a kapcsolódó tételekre vonatkozik.
+      </div>
+      <Field label="Évjárat szűrés">
+        <select style={inputStyle} value={evjaratSzuro} onChange={e=>setEvjaratSzuro(e.target.value)}>
+          <option value="mind">Minden évjárat</option>
+          {evjaratok.map(ev=><option key={ev} value={ev}>{ev}</option>)}
+        </select>
+      </Field>
+      <Field label="Állapot szűrés">
+        <select style={inputStyle} value={allapotSzuro} onChange={e=>setAllapotSzuro(e.target.value)}>
+          <option value="mind">Minden állapot</option>
+          <option value="aktív">Csak aktív</option>
+          <option value="lezárt">Csak lezárt</option>
+          <option value="palackozott">Csak palackozott</option>
+        </select>
+      </Field>
+      <div className="mono" style={{fontSize:12.5,color:'var(--ink-soft)',marginBottom:14}}>
+        {szurtTetelek.length} tétel kerül exportálásra.
+      </div>
+      {hiba && <div style={{fontSize:13,color:'var(--wine)',marginBottom:14}}>{hiba}</div>}
+      <button onClick={generalExcel} disabled={generalas} style={primaryBtn(generalas)}>
+        {generalas ? 'Generálás…' : '⬇ Excel letöltése'}
+      </button>
+    </ModalShell>
+  );
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
