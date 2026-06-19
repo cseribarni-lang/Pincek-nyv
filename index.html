@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Pincekönyv">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1A2F1A">
+<title>Pincekönyv — Borászati Nyomkövető</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#1A2F1A;
+  --cream:#F7F4EE;
+  --oak:#8B4513;
+  --must:#C9A961;
+  --wine:#7A1F2B;
+  --leaf:#3D5A3D;
+  --paper:#FFFEFA;
+  --line:#DDD8C8;
+  --ink-soft:#5C6B5C;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--cream);font-family:'Inter',system-ui,sans-serif;color:var(--ink);}
+#root{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);min-height:100vh;}
+input,select,textarea,button{font-family:inherit;}
+.mono{font-family:'JetBrains Mono',monospace;}
+.display{font-family:'Fraunces',serif;}
+#sync-badge,#offline-badge{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);right:12px;font-size:11px;padding:5px 12px;border-radius:20px;opacity:0;transition:opacity .4s;z-index:9999;pointer-events:none;font-weight:600;letter-spacing:.02em;}
+#sync-badge{background:var(--leaf);color:#fff;}
+#offline-badge{background:var(--oak);color:#fff;}
+::-webkit-scrollbar{width:8px;height:8px;}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="sync-badge">🔄 Szinkronizálva</div>
+<div id="offline-badge">📵 Offline</div>
+
+<script>
+const SB_URL='https://tbigqmtirjaukhxwmqhw.supabase.co';
+const SB_KEY='sb_publishable_6UD_aMtMYZxsHd5wXUmthw_UodjS_yH';
+const SB_H={'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Content-Type':'application/json'};
+
+function badge(id,ms){const e=document.getElementById(id);if(!e)return;e.style.opacity='1';setTimeout(()=>e.style.opacity='0',ms||1800);}
+
+async function sbSelect(table,query){
+  try{
+    const r=await fetch(`${SB_URL}/rest/v1/${table}?${query||'select=*'}`,{headers:SB_H,signal:AbortSignal.timeout(8000)});
+    if(!r.ok) throw new Error('select failed');
+    badge('sync-badge',1200);
+    return await r.json();
+  }catch(e){ badge('offline-badge',2000); return null; }
+}
+async function sbInsert(table,obj){
+  try{
+    const r=await fetch(`${SB_URL}/rest/v1/${table}`,{method:'POST',headers:{...SB_H,'Prefer':'return=representation'},body:JSON.stringify(obj),signal:AbortSignal.timeout(8000)});
+    if(!r.ok) throw new Error('insert failed');
+    badge('sync-badge',1500);
+    return await r.json();
+  }catch(e){ badge('offline-badge',2500); return null; }
+}
+async function sbUpdate(table,id,obj){
+  try{
+    const r=await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`,{method:'PATCH',headers:{...SB_H,'Prefer':'return=representation'},body:JSON.stringify(obj),signal:AbortSignal.timeout(8000)});
+    if(!r.ok) throw new Error('update failed');
+    badge('sync-badge',1200);
+    return await r.json();
+  }catch(e){ badge('offline-badge',2500); return null; }
+}
+async function sbDelete(table,id){
+  try{
+    const r=await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`,{method:'DELETE',headers:SB_H,signal:AbortSignal.timeout(8000)});
+    badge('sync-badge',1200);
+    return r.ok;
+  }catch(e){ badge('offline-badge',2500); return false; }
+}
+
+// Realtime websocket — egyszerű broadcast figyelő, amely jelzi ha bármi változott
+let rtCallback=null;
+(function rt(){
+  const wu=SB_URL.replace('https://','wss://')+'/realtime/v1/websocket?apikey='+SB_KEY+'&vsn=1.0.0';
+  let ws,hb,ref=1;
+  const tables=['tetelek','tetel_stadiumok','kezelesek','analitikak','kezeloanyagok'];
+  function conn(){
+    try{
+      ws=new WebSocket(wu);
+      ws.onopen=()=>{
+        tables.forEach(t=>{
+          ws.send(JSON.stringify({topic:'realtime:public:'+t,event:'phx_join',payload:{config:{postgres_changes:[{event:'*',schema:'public',table:t}]}},ref:String(ref++)}));
+        });
+        hb=setInterval(()=>{if(ws.readyState===1)ws.send(JSON.stringify({topic:'phoenix',event:'heartbeat',payload:{},ref:'hb'}));},25000);
+      };
+      ws.onmessage=e=>{
+        try{
+          const m=JSON.parse(e.data);
+          if(m.event==='postgres_changes' || m.payload?.data){
+            if(rtCallback) rtCallback();
+            badge('sync-badge',1500);
+          }
+        }catch(err){}
+      };
+      ws.onclose=()=>{clearInterval(hb);setTimeout(conn,6000);};
+      ws.onerror=()=>ws.close();
+    }catch(e){setTimeout(conn,10000);}
+  }
+  conn();
+})();
+</script>
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const {useState,useEffect,useCallback,useRef} = React;
+
+const BORFAJTA_SZIN = {
+  'Fehérbor': '#C9A961',
+  'Vörösbor': '#7A1F2B',
+  'Rosé': '#C77B6F',
+  'Pezsgő': '#8FA68E'
+};
+
+function fmtDate(d){
+  if(!d) return '';
+  const dt = new Date(d);
+  return dt.toLocaleDateString('hu-HU',{year:'numeric',month:'2-digit',day:'2-digit'});
+}
+
+// ---------- App gyökér ----------
+function App(){
+  const [tetelek,setTetelek] = useState([]);
+  const [sablonok,setSablonok] = useState({}); // borfajta -> [stadium nevek sorrendben]
+  const [kezeloanyagok,setKezeloanyagok] = useState([]);
+  const [edenyek,setEdenyek] = useState([]);
+  const [edenyTartalom,setEdenyTartalom] = useState([]);
+  const [kivalasztott,setKivalasztott] = useState(null);
+  const [loading,setLoading] = useState(true);
+  const [ujTetelNyitva,setUjTetelNyitva] = useState(false);
+  const [szuro,setSzuro] = useState('mind');
+  const [nezet,setNezet] = useState('tetelek'); // 'tetelek' | 'edenyek'
+
+  const loadAll = useCallback(async ()=>{
+    const [tArr, sablonArr, stadiumArr, anyagArr, edenyArr, tartalomArr] = await Promise.all([
+      sbSelect('tetelek','select=*&order=letrehozva.desc'),
+      sbSelect('bor_sablonok','select=*'),
+      sbSelect('bor_sablon_stadiumok','select=*&order=sorrend.asc'),
+      sbSelect('kezeloanyagok','select=*&order=kategoria.asc,nev.asc'),
+      sbSelect('edenyek','select=*&order=nev.asc'),
+      sbSelect('edeny_tartalom','select=*,tetelek(azonosito,fajta,borfajta)')
+    ]);
+    if(tArr) setTetelek(tArr);
+    if(anyagArr) setKezeloanyagok(anyagArr);
+    if(edenyArr) setEdenyek(edenyArr);
+    if(tartalomArr) setEdenyTartalom(tartalomArr);
+    if(sablonArr && stadiumArr){
+      const map = {};
+      sablonArr.forEach(s=>{
+        map[s.borfajta] = stadiumArr.filter(st=>st.sablon_id===s.id).map(st=>st.nev);
+      });
+      setSablonok(map);
+    }
+    setLoading(false);
+  },[]);
+
+  useEffect(()=>{
+    loadAll();
+    rtCallback = ()=>loadAll();
+    return ()=>{ rtCallback=null; };
+  },[loadAll]);
+
+  const tetelekSzurve = szuro==='mind' ? tetelek : tetelek.filter(t=>t.allapot===szuro);
+
+  return (
+    <div style={{display:'flex',minHeight:'100vh',flexDirection:'column'}}>
+      <Header onUjTetel={()=>setUjTetelNyitva(true)} nezet={nezet} setNezet={setNezet} />
+      {nezet==='tetelek' ? (
+        <div style={{display:'flex',flex:1,minHeight:0}}>
+          <Sidebar
+            tetelek={tetelekSzurve}
+            kivalasztott={kivalasztott}
+            onValaszt={setKivalasztott}
+            szuro={szuro}
+            setSzuro={setSzuro}
+            loading={loading}
+          />
+          <MainPanel
+            tetel={tetelek.find(t=>t.id===kivalasztott)}
+            sablonok={sablonok}
+            kezeloanyagok={kezeloanyagok}
+            edenyek={edenyek}
+            edenyTartalom={edenyTartalom}
+            onReload={loadAll}
+          />
+        </div>
+      ) : (
+        <EdenyekNezet
+          edenyek={edenyek}
+          edenyTartalom={edenyTartalom}
+          tetelek={tetelek}
+          onReload={loadAll}
+        />
+      )}
+      {ujTetelNyitva && (
+        <UjTetelModal
+          sablonok={sablonok}
+          onClose={()=>setUjTetelNyitva(false)}
+          onCreated={(id)=>{ loadAll(); setKivalasztott(id); setUjTetelNyitva(false); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function Header({onUjTetel,nezet,setNezet}){
+  return (
+    <header style={{
+      background:'var(--ink)', color:'var(--cream)', padding:'18px 24px',
+      display:'flex', alignItems:'center', justifyContent:'space-between',
+      borderBottom:'3px solid var(--must)', flexWrap:'wrap', gap:12
+    }}>
+      <div style={{display:'flex',alignItems:'baseline',gap:10}}>
+        <span className="display" style={{fontSize:24,fontWeight:600,letterSpacing:'.01em'}}>Pincekönyv</span>
+        <span style={{fontSize:12,color:'var(--must)',fontFamily:"'JetBrains Mono',monospace",letterSpacing:'.05em'}}>SZŐLŐTŐL PALACKIG</span>
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:14}}>
+        <div style={{display:'flex',gap:4,background:'rgba(255,255,255,0.08)',borderRadius:8,padding:3}}>
+          <button onClick={()=>setNezet('tetelek')} style={{
+            background: nezet==='tetelek' ? 'var(--must)' : 'transparent',
+            color: nezet==='tetelek' ? 'var(--ink)' : 'var(--cream)',
+            border:'none', borderRadius:6, padding:'7px 14px', fontWeight:600, fontSize:13, cursor:'pointer'
+          }}>Tételek</button>
+          <button onClick={()=>setNezet('edenyek')} style={{
+            background: nezet==='edenyek' ? 'var(--must)' : 'transparent',
+            color: nezet==='edenyek' ? 'var(--ink)' : 'var(--cream)',
+            border:'none', borderRadius:6, padding:'7px 14px', fontWeight:600, fontSize:13, cursor:'pointer'
+          }}>Edények</button>
+        </div>
+        {nezet==='tetelek' && (
+          <button onClick={onUjTetel} style={{
+            background:'var(--must)', color:'var(--ink)', border:'none', borderRadius:6,
+            padding:'9px 16px', fontWeight:700, fontSize:14, cursor:'pointer'
+          }}>+ Új tétel</button>
+        )}
+      </div>
+    </header>
+  );
+}
+
+function Sidebar({tetelek,kivalasztott,onValaszt,szuro,setSzuro,loading}){
+  return (
+    <aside style={{
+      width:300, minWidth:300, borderRight:'1px solid var(--line)', background:'var(--paper)',
+      overflowY:'auto', display:'flex', flexDirection:'column'
+    }}>
+      <div style={{padding:'14px 16px 8px', display:'flex', gap:6}}>
+        {['mind','aktív','lezárt','palackozott'].map(s=>(
+          <button key={s} onClick={()=>setSzuro(s)} style={{
+            fontSize:11, padding:'5px 9px', borderRadius:14, border:'1px solid var(--line)',
+            background: szuro===s ? 'var(--ink)' : 'transparent',
+            color: szuro===s ? 'var(--cream)' : 'var(--ink-soft)',
+            cursor:'pointer', fontWeight:600, textTransform:'capitalize'
+          }}>{s}</button>
+        ))}
+      </div>
+      <div style={{flex:1, overflowY:'auto', padding:'4px 10px 16px'}}>
+        {loading && <div style={{padding:20,color:'var(--ink-soft)',fontSize:13}}>Betöltés…</div>}
+        {!loading && tetelek.length===0 && (
+          <div style={{padding:'30px 14px',color:'var(--ink-soft)',fontSize:13,textAlign:'center'}}>
+            Még nincs felvitt tétel.<br/>Kattints a "+ Új tétel" gombra.
+          </div>
+        )}
+        {tetelek.map(t=>(
+          <TetelKartya key={t.id} tetel={t} kivalasztva={t.id===kivalasztott} onClick={()=>onValaszt(t.id)} />
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+function TetelKartya({tetel,kivalasztva,onClick}){
+  const szin = BORFAJTA_SZIN[tetel.borfajta] || '#999';
+  return (
+    <div onClick={onClick} style={{
+      padding:'12px 14px', marginBottom:6, borderRadius:8, cursor:'pointer',
+      background: kivalasztva ? '#EFEAD9' : 'transparent',
+      border: kivalasztva ? '1px solid var(--must)' : '1px solid transparent',
+      transition:'background .15s'
+    }}>
+      <div style={{display:'flex',alignItems:'center',gap:8}}>
+        <div style={{width:8,height:8,borderRadius:'50%',background:szin,flexShrink:0}}></div>
+        <div className="display" style={{fontWeight:600,fontSize:15,color:'var(--ink)'}}>{tetel.azonosito}</div>
+      </div>
+      <div style={{fontSize:12,color:'var(--ink-soft)',marginTop:3,marginLeft:16}}>
+        {tetel.fajta} · {tetel.evjarat}
+      </div>
+      <div style={{fontSize:11,color:'var(--ink-soft)',marginTop:2,marginLeft:16,fontFamily:"'JetBrains Mono',monospace"}}>
+        {tetel.allapot.toUpperCase()}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Fő panel ----------
+function MainPanel({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onReload}){
+  if(!tetel){
+    return (
+      <main style={{flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--ink-soft)'}}>
+        <div style={{textAlign:'center',maxWidth:340}}>
+          <div className="display" style={{fontSize:22,marginBottom:8,color:'var(--ink)'}}>Válassz egy tételt</div>
+          <div style={{fontSize:14}}>A bal oldali listából válassz egy tételt, vagy hozz létre egy újat a folyamat elindításához.</div>
+        </div>
+      </main>
+    );
+  }
+  return <TetelReszletek tetel={tetel} sablonok={sablonok} kezeloanyagok={kezeloanyagok} edenyek={edenyek} edenyTartalom={edenyTartalom} onReload={onReload} />;
+}
+
+function TetelReszletek({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onReload}){
+  const [stadiumok,setStadiumok] = useState([]);
+  const [kezelesek,setKezelesek] = useState([]);
+  const [analitikak,setAnalitikak] = useState([]);
+  const [tab,setTab] = useState('idovonal'); // idovonal | kezelesek | analitika
+  const [ujKezelesNyitva,setUjKezelesNyitva] = useState(false);
+  const [ujAnalitikaNyitva,setUjAnalitikaNyitva] = useState(false);
+  const [szerkesztesNyitva,setSzerkesztesNyitva] = useState(false);
+
+  const load = useCallback(async ()=>{
+    const [st, kz, an] = await Promise.all([
+      sbSelect('tetel_stadiumok', `select=*&tetel_id=eq.${tetel.id}&order=sorrend.asc`),
+      sbSelect('kezelesek', `select=*,kezeloanyagok(nev)&tetel_id=eq.${tetel.id}&order=datum.desc,letrehozva.desc`),
+      sbSelect('analitikak', `select=*&tetel_id=eq.${tetel.id}&order=datum.desc`)
+    ]);
+    if(st) setStadiumok(st);
+    if(kz) setKezelesek(kz);
+    if(an) setAnalitikak(an);
+  },[tetel.id]);
+
+  useEffect(()=>{ load(); },[load]);
+
+  const szin = BORFAJTA_SZIN[tetel.borfajta] || '#999';
+
+  const lepesVegrehajt = async (irany) => {
+    const aktualisIdx = stadiumok.findIndex(s => !s.befejezve);
+    if(irany==='kovetkezo' && aktualisIdx>=0){
+      const most = new Date().toISOString();
+      await sbUpdate('tetel_stadiumok', stadiumok[aktualisIdx].id, {befejezve: most});
+      const kovetkezoIdx = aktualisIdx+1;
+      if(stadiumok[kovetkezoIdx]){
+        await sbUpdate('tetel_stadiumok', stadiumok[kovetkezoIdx].id, {elkezdve: most});
+        await sbUpdate('tetelek', tetel.id, {jelenlegi_stadium_sorrend: stadiumok[kovetkezoIdx].sorrend});
+      } else {
+        await sbUpdate('tetelek', tetel.id, {allapot:'palackozott'});
+      }
+      load(); onReload();
+    }
+  };
+
+  return (
+    <main style={{flex:1, overflowY:'auto', padding:'24px 32px', background:'var(--cream)'}}>
+      {/* Pincekönyv fejléc kártya */}
+      <div style={{
+        background:'var(--paper)', border:'1px solid var(--line)', borderRadius:12,
+        padding:'22px 26px', marginBottom:24, position:'relative', overflow:'hidden'
+      }}>
+        <div style={{position:'absolute',top:0,left:0,bottom:0,width:6,background:szin}}></div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:16}}>
+          <div>
+            <div className="display" style={{fontSize:28,fontWeight:600,color:'var(--ink)'}}>{tetel.azonosito}</div>
+            <div style={{fontSize:14,color:'var(--ink-soft)',marginTop:4}}>
+              {tetel.fajta} · {tetel.borfajta} · {tetel.evjarat}évjárat
+              {tetel.dulo ? ` · ${tetel.dulo}` : ''}
+            </div>
+            <div className="mono" style={{fontSize:13,color:'var(--ink-soft)',marginTop:6}}>
+              {tetel.mennyiseg_kg ? `${tetel.mennyiseg_kg} kg` : ''}
+              {tetel.mennyiseg_liter ? `  ·  ${tetel.mennyiseg_liter} l` : ''}
+            </div>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <button onClick={()=>setSzerkesztesNyitva(true)} style={{
+              background:'transparent', border:'1px solid var(--line)', borderRadius:6,
+              padding:'6px 12px', fontSize:12.5, fontWeight:600, cursor:'pointer', color:'var(--ink-soft)'
+            }}>✎ Szerkesztés</button>
+            <div style={{
+              background: tetel.allapot==='palackozott' ? 'var(--leaf)' : (tetel.allapot==='lezárt' ? 'var(--oak)' : szin),
+              color:'#fff', fontSize:12, fontWeight:700, padding:'6px 14px', borderRadius:20, letterSpacing:'.03em'
+            }}>{tetel.allapot.toUpperCase()}</div>
+          </div>
+        </div>
+
+        {tetel.megjegyzes && (
+          <div style={{marginTop:10, fontSize:13, color:'var(--ink-soft)', fontStyle:'italic'}}>{tetel.megjegyzes}</div>
+        )}
+
+        {edenyTartalom && edenyTartalom.filter(t=>t.tetel_id===tetel.id).length > 0 && (
+          <div style={{marginTop:12, display:'flex', flexWrap:'wrap', gap:8}}>
+            {edenyTartalom.filter(t=>t.tetel_id===tetel.id).map(t=>{
+              const e = edenyek.find(ed=>ed.id===t.edeny_id);
+              return (
+                <div key={t.id} className="mono" style={{
+                  fontSize:11.5, background:'#EEEAE0', color:'var(--ink)', padding:'4px 10px',
+                  borderRadius:14, fontWeight:600
+                }}>
+                  🛢 {e ? e.nev : '?'}{t.agazat?`/${t.agazat}`:''} — {t.mennyiseg_liter} l
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Stádium progresszsáv - hordócsap stílusú jelölők */}
+        <div style={{marginTop:26}}>
+          <StadiumSav stadiumok={stadiumok} szin={szin} />
+          {tetel.allapot==='aktív' && (
+            <div style={{marginTop:16,display:'flex',justifyContent:'flex-end'}}>
+              <button onClick={()=>lepesVegrehajt('kovetkezo')} style={{
+                background:'var(--ink)', color:'var(--cream)', border:'none', borderRadius:6,
+                padding:'9px 18px', fontWeight:600, fontSize:13, cursor:'pointer'
+              }}>Következő stádium →</button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Tabok */}
+      <div style={{display:'flex',gap:4,borderBottom:'1px solid var(--line)',marginBottom:18}}>
+        {[['idovonal','Idővonal'],['kezelesek','Kezelések'],['analitika','Analitika']].map(([k,label])=>(
+          <button key={k} onClick={()=>setTab(k)} style={{
+            background:'none', border:'none', padding:'10px 16px', cursor:'pointer',
+            fontWeight:600, fontSize:14, color: tab===k ? 'var(--ink)' : 'var(--ink-soft)',
+            borderBottom: tab===k ? '2px solid var(--must)' : '2px solid transparent'
+          }}>{label}</button>
+        ))}
+        <div style={{flex:1}}></div>
+        {tab==='kezelesek' && (
+          <button onClick={()=>setUjKezelesNyitva(true)} style={{
+            background:'var(--must)', border:'none', borderRadius:6, padding:'8px 14px',
+            fontWeight:700, fontSize:13, cursor:'pointer', color:'var(--ink)', marginBottom:6
+          }}>+ Kezelés rögzítése</button>
+        )}
+        {tab==='analitika' && (
+          <button onClick={()=>setUjAnalitikaNyitva(true)} style={{
+            background:'var(--must)', border:'none', borderRadius:6, padding:'8px 14px',
+            fontWeight:700, fontSize:13, cursor:'pointer', color:'var(--ink)', marginBottom:6
+          }}>+ Mérés rögzítése</button>
+        )}
+      </div>
+
+      {tab==='idovonal' && <Idovonal stadiumok={stadiumok} kezelesek={kezelesek} analitikak={analitikak} />}
+      {tab==='kezelesek' && <KezelesLista kezelesek={kezelesek} stadiumok={stadiumok} />}
+      {tab==='analitika' && <AnalitikaLista analitikak={analitikak} />}
+
+      {ujKezelesNyitva && (
+        <UjKezelesModal
+          tetel={tetel} stadiumok={stadiumok} kezeloanyagok={kezeloanyagok}
+          onClose={()=>setUjKezelesNyitva(false)}
+          onCreated={()=>{ load(); setUjKezelesNyitva(false); }}
+        />
+      )}
+      {ujAnalitikaNyitva && (
+        <UjAnalitikaModal
+          tetel={tetel}
+          onClose={()=>setUjAnalitikaNyitva(false)}
+          onCreated={()=>{ load(); setUjAnalitikaNyitva(false); }}
+        />
+      )}
+      {szerkesztesNyitva && (
+        <UjTetelModal
+          sablonok={sablonok} tetel={tetel}
+          onClose={()=>setSzerkesztesNyitva(false)}
+          onCreated={()=>{ onReload(); setSzerkesztesNyitva(false); }}
+        />
+      )}
+    </main>
+  );
+}
+
+function StadiumSav({stadiumok,szin}){
+  if(stadiumok.length===0) return <div style={{color:'var(--ink-soft)',fontSize:13}}>Nincsenek stádiumok beállítva.</div>;
+  return (
+    <div style={{display:'flex',alignItems:'center',overflowX:'auto',paddingBottom:6}}>
+      {stadiumok.map((s,i)=>{
+        const kesz = !!s.befejezve;
+        const aktiv = s.elkezdve && !s.befejezve;
+        return (
+          <React.Fragment key={s.id}>
+            <div style={{display:'flex',flexDirection:'column',alignItems:'center',minWidth:86}}>
+              <div style={{
+                width:30,height:30,borderRadius:'50%',
+                background: kesz ? szin : (aktiv ? 'var(--paper)' : '#EEEAE0'),
+                border: aktiv ? `3px solid ${szin}` : (kesz ? 'none' : '2px solid var(--line)'),
+                display:'flex',alignItems:'center',justifyContent:'center',
+                color: kesz ? '#fff' : 'var(--ink-soft)', fontWeight:700, fontSize:13
+              }}>{kesz ? '✓' : i+1}</div>
+              <div style={{fontSize:11.5, marginTop:6, textAlign:'center', color: aktiv ? 'var(--ink)' : 'var(--ink-soft)', fontWeight: aktiv?700:500, maxWidth:90}}>{s.nev}</div>
+              {s.elkezdve && <div className="mono" style={{fontSize:9.5,color:'var(--ink-soft)',marginTop:2}}>{fmtDate(s.elkezdve)}</div>}
+            </div>
+            {i<stadiumok.length-1 && (
+              <div style={{height:2, flex:1, minWidth:20, background: stadiumok[i+1].elkezdve || kesz ? szin : 'var(--line)', marginBottom:24}}></div>
+            )}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+function Idovonal({stadiumok,kezelesek,analitikak}){
+  const esemenyek = [
+    ...kezelesek.map(k=>({...k,_tipus:'kezeles',_datum:k.datum})),
+    ...analitikak.map(a=>({...a,_tipus:'analitika',_datum:a.datum}))
+  ].sort((a,b)=> new Date(b._datum) - new Date(a._datum));
+
+  if(esemenyek.length===0){
+    return <UresAllapot szoveg="Még nincs rögzített esemény ehhez a tételhez." />;
+  }
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:10}}>
+      {esemenyek.map((e,i)=>(
+        <div key={i} style={{
+          display:'flex', gap:14, padding:'12px 16px', background:'var(--paper)',
+          border:'1px solid var(--line)', borderRadius:8
+        }}>
+          <div className="mono" style={{fontSize:12, color:'var(--ink-soft)', minWidth:78, paddingTop:2}}>{fmtDate(e._datum)}</div>
+          <div style={{flex:1}}>
+            {e._tipus==='kezeles' ? (
+              <>
+                <div style={{fontWeight:700,fontSize:14,color:'var(--wine)'}}>{e.tipus}{e.stadium_nev?` · ${e.stadium_nev}`:''}</div>
+                <div style={{fontSize:13,color:'var(--ink-soft)',marginTop:2}}>
+                  {(e.kezeloanyagok && e.kezeloanyagok.nev) ? `${e.kezeloanyagok.nev} — ${e.mennyiseg||''} ${e.mertekegyseg||''}` : ''}
+                  {e.megjegyzes ? `  ${e.megjegyzes}` : ''}
+                </div>
+                {e.vegezte && <div style={{fontSize:11.5,color:'var(--ink-soft)',marginTop:2}}>Végezte: {e.vegezte}</div>}
+              </>
+            ) : (
+              <>
+                <div style={{fontWeight:700,fontSize:14,color:'var(--leaf)'}}>Analitikai mérés</div>
+                <div className="mono" style={{fontSize:12.5,color:'var(--ink-soft)',marginTop:3,display:'flex',gap:14,flexWrap:'wrap'}}>
+                  {e.cukorfok!=null && <span>Cukorfok: {e.cukorfok}</span>}
+                  {e.ph!=null && <span>pH: {e.ph}</span>}
+                  {e.sav!=null && <span>Sav: {e.sav} g/l</span>}
+                  {e.so2_szabad!=null && <span>SO2 szabad: {e.so2_szabad} mg/l</span>}
+                  {e.so2_osszes!=null && <span>SO2 összes: {e.so2_osszes} mg/l</span>}
+                  {e.alkohol!=null && <span>Alkohol: {e.alkohol}%</span>}
+                  {e.homerseklet!=null && <span>Hőm.: {e.homerseklet}°C</span>}
+                </div>
+                {e.megjegyzes && <div style={{fontSize:13,color:'var(--ink-soft)',marginTop:2}}>{e.megjegyzes}</div>}
+              </>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function KezelesLista({kezelesek}){
+  if(kezelesek.length===0) return <UresAllapot szoveg="Még nincs rögzített kezelés. Add hozzá az elsőt a gombbal." />;
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:8}}>
+      {kezelesek.map(k=>(
+        <div key={k.id} style={{padding:'12px 16px',background:'var(--paper)',border:'1px solid var(--line)',borderRadius:8,display:'flex',gap:14}}>
+          <div className="mono" style={{fontSize:12,color:'var(--ink-soft)',minWidth:78}}>{fmtDate(k.datum)}</div>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:700,fontSize:14}}>{k.tipus} {k.stadium_nev && <span style={{color:'var(--ink-soft)',fontWeight:500}}>· {k.stadium_nev}</span>}</div>
+            <div style={{fontSize:13,color:'var(--ink-soft)',marginTop:2}}>
+              {(k.kezeloanyagok && k.kezeloanyagok.nev) && `${k.kezeloanyagok.nev} — ${k.mennyiseg||''} ${k.mertekegyseg||''}`}
+            </div>
+            {k.megjegyzes && <div style={{fontSize:13,marginTop:2}}>{k.megjegyzes}</div>}
+            {k.vegezte && <div style={{fontSize:11.5,color:'var(--ink-soft)',marginTop:3}}>Végezte: {k.vegezte}</div>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AnalitikaLista({analitikak}){
+  if(analitikak.length===0) return <UresAllapot szoveg="Még nincs rögzített mérés. Add hozzá az elsőt a gombbal." />;
+  return (
+    <div style={{overflowX:'auto'}}>
+      <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+        <thead>
+          <tr style={{borderBottom:'2px solid var(--line)',textAlign:'left'}}>
+            {['Dátum','Cukorfok','pH','Sav (g/l)','SO2 szab.','SO2 össz.','Alkohol %','Hőm. °C','Megjegyzés'].map(h=>(
+              <th key={h} style={{padding:'8px 10px',color:'var(--ink-soft)',fontWeight:600,whiteSpace:'nowrap'}}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="mono">
+          {analitikak.map(a=>(
+            <tr key={a.id} style={{borderBottom:'1px solid var(--line)'}}>
+              <td style={{padding:'8px 10px'}}>{fmtDate(a.datum)}</td>
+              <td style={{padding:'8px 10px'}}>{a.cukorfok!=null?a.cukorfok:'—'}</td>
+              <td style={{padding:'8px 10px'}}>{a.ph!=null?a.ph:'—'}</td>
+              <td style={{padding:'8px 10px'}}>{a.sav!=null?a.sav:'—'}</td>
+              <td style={{padding:'8px 10px'}}>{a.so2_szabad!=null?a.so2_szabad:'—'}</td>
+              <td style={{padding:'8px 10px'}}>{a.so2_osszes!=null?a.so2_osszes:'—'}</td>
+              <td style={{padding:'8px 10px'}}>{a.alkohol!=null?a.alkohol:'—'}</td>
+              <td style={{padding:'8px 10px'}}>{a.homerseklet!=null?a.homerseklet:'—'}</td>
+              <td style={{padding:'8px 10px',fontFamily:"'Inter',sans-serif"}}>{a.megjegyzes||''}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function UresAllapot({szoveg}){
+  return (
+    <div style={{padding:'40px 20px',textAlign:'center',color:'var(--ink-soft)',fontSize:14,background:'var(--paper)',border:'1px dashed var(--line)',borderRadius:8}}>
+      {szoveg}
+    </div>
+  );
+}
+
+// ---------- Modal: Új tétel ----------
+function ModalShell({title,onClose,children,width}){
+  return (
+    <div onClick={onClose} style={{
+      position:'fixed',inset:0,background:'rgba(26,47,26,0.45)',zIndex:1000,
+      display:'flex',alignItems:'center',justifyContent:'center',padding:16
+    }}>
+      <div onClick={e=>e.stopPropagation()} style={{
+        background:'var(--paper)', borderRadius:12, padding:'24px 26px', width: width||440,
+        maxWidth:'100%', maxHeight:'88vh', overflowY:'auto', boxShadow:'0 20px 60px rgba(0,0,0,.25)'
+      }}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
+          <div className="display" style={{fontSize:20,fontWeight:600}}>{title}</div>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:'var(--ink-soft)'}}>✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Field({label,children}){
+  return (
+    <div style={{marginBottom:14}}>
+      <label style={{display:'block',fontSize:12.5,fontWeight:600,color:'var(--ink-soft)',marginBottom:5}}>{label}</label>
+      {children}
+    </div>
+  );
+}
+const inputStyle={width:'100%',padding:'9px 11px',border:'1px solid var(--line)',borderRadius:6,fontSize:14,background:'#fff'};
+
+function UjTetelModal({sablonok,onClose,onCreated,tetel}){
+  const szerkesztes = !!tetel;
+  const [form,setForm] = useState(szerkesztes ? {
+    azonosito: tetel.azonosito||'', evjarat: tetel.evjarat||new Date().getFullYear(),
+    fajta: tetel.fajta||'', borfajta: tetel.borfajta||'Fehérbor', dulo: tetel.dulo||'',
+    mennyiseg_kg: tetel.mennyiseg_kg!=null ? String(tetel.mennyiseg_kg) : '',
+    mennyiseg_liter: tetel.mennyiseg_liter!=null ? String(tetel.mennyiseg_liter) : '',
+    allapot: tetel.allapot||'aktív', megjegyzes: tetel.megjegyzes||''
+  } : {azonosito:'',evjarat:new Date().getFullYear(),fajta:'',borfajta:'Fehérbor',dulo:'',mennyiseg_kg:'',mennyiseg_liter:'',allapot:'aktív',megjegyzes:''});
+  const [mentes,setMentes] = useState(false);
+  const borfajtak = Object.keys(sablonok).length ? Object.keys(sablonok) : ['Fehérbor','Vörösbor','Rosé','Pezsgő'];
+
+  const submit = async ()=>{
+    if(!form.azonosito || !form.fajta) return;
+    setMentes(true);
+
+    if(szerkesztes){
+      await sbUpdate('tetelek', tetel.id, {
+        azonosito: form.azonosito,
+        evjarat: parseInt(form.evjarat)||new Date().getFullYear(),
+        fajta: form.fajta,
+        borfajta: form.borfajta,
+        dulo: form.dulo||null,
+        mennyiseg_kg: form.mennyiseg_kg? parseFloat(form.mennyiseg_kg): null,
+        mennyiseg_liter: form.mennyiseg_liter? parseFloat(form.mennyiseg_liter): null,
+        allapot: form.allapot,
+        megjegyzes: form.megjegyzes||null
+      });
+      onCreated(tetel.id);
+    } else {
+      const ujak = await sbInsert('tetelek',{
+        azonosito: form.azonosito,
+        evjarat: parseInt(form.evjarat)||new Date().getFullYear(),
+        fajta: form.fajta,
+        borfajta: form.borfajta,
+        dulo: form.dulo||null,
+        mennyiseg_kg: form.mennyiseg_kg? parseFloat(form.mennyiseg_kg): null,
+        mennyiseg_liter: form.mennyiseg_liter? parseFloat(form.mennyiseg_liter): null,
+        jelenlegi_stadium_sorrend: 1,
+        allapot: 'aktív',
+        megjegyzes: form.megjegyzes||null
+      });
+      if(ujak && ujak[0]){
+        const tetelId = ujak[0].id;
+        const stadiumNevek = sablonok[form.borfajta] || [];
+        const most = new Date().toISOString();
+        for(let i=0;i<stadiumNevek.length;i++){
+          await sbInsert('tetel_stadiumok',{
+            tetel_id: tetelId, nev: stadiumNevek[i], sorrend: i+1,
+            elkezdve: i===0 ? most : null
+          });
+        }
+        onCreated(tetelId);
+      }
+    }
+    setMentes(false);
+  };
+
+  return (
+    <ModalShell title={szerkesztes ? "Tétel szerkesztése" : "Új tétel létrehozása"} onClose={onClose}>
+      <Field label="Tétel azonosító">
+        <input style={inputStyle} placeholder="pl. 2026-OLASZRIZLING-01" value={form.azonosito} onChange={e=>setForm({...form,azonosito:e.target.value})} />
+      </Field>
+      <div style={{display:'flex',gap:10}}>
+        <Field label="Évjárat"><input type="number" style={inputStyle} value={form.evjarat} onChange={e=>setForm({...form,evjarat:e.target.value})} /></Field>
+        <Field label="Szőlőfajta"><input style={inputStyle} placeholder="pl. Olaszrizling" value={form.fajta} onChange={e=>setForm({...form,fajta:e.target.value})} /></Field>
+      </div>
+      <Field label={szerkesztes ? "Borfajta (utólag nem módosítható)" : "Borfajta (meghatározza a stádiumokat)"}>
+        <select style={{...inputStyle, opacity: szerkesztes ? .6 : 1}} value={form.borfajta} onChange={e=>setForm({...form,borfajta:e.target.value})} disabled={szerkesztes}>
+          {borfajtak.map(b=><option key={b} value={b}>{b}</option>)}
+        </select>
+      </Field>
+      <Field label="Dűlő / eredet (opcionális)">
+        <input style={inputStyle} value={form.dulo} onChange={e=>setForm({...form,dulo:e.target.value})} />
+      </Field>
+      <div style={{display:'flex',gap:10}}>
+        <Field label="Mennyiség (kg)"><input type="number" style={inputStyle} value={form.mennyiseg_kg} onChange={e=>setForm({...form,mennyiseg_kg:e.target.value})} /></Field>
+        <Field label="Mennyiség (liter)"><input type="number" style={inputStyle} value={form.mennyiseg_liter} onChange={e=>setForm({...form,mennyiseg_liter:e.target.value})} /></Field>
+      </div>
+      {szerkesztes && (
+        <Field label="Állapot">
+          <select style={inputStyle} value={form.allapot} onChange={e=>setForm({...form,allapot:e.target.value})}>
+            <option value="aktív">Aktív</option>
+            <option value="lezárt">Lezárt</option>
+            <option value="palackozott">Palackozott</option>
+          </select>
+        </Field>
+      )}
+      <Field label="Megjegyzés (opcionális)">
+        <textarea style={{...inputStyle,minHeight:60,resize:'vertical'}} value={form.megjegyzes} onChange={e=>setForm({...form,megjegyzes:e.target.value})} />
+      </Field>
+      <button onClick={submit} disabled={mentes || !form.azonosito || !form.fajta} style={{
+        width:'100%', marginTop:8, background:'var(--ink)', color:'var(--cream)', border:'none',
+        borderRadius:6, padding:'11px', fontWeight:700, fontSize:14, cursor:'pointer',
+        opacity: (mentes || !form.azonosito || !form.fajta) ? .5 : 1
+      }}>{mentes ? 'Mentés…' : (szerkesztes ? 'Módosítások mentése' : 'Tétel létrehozása')}</button>
+    </ModalShell>
+  );
+}
+
+// ---------- Modal: Új kezelés ----------
+function UjKezelesModal({tetel,stadiumok,kezeloanyagok,onClose,onCreated}){
+  const aktualisStadium = stadiumok.find(s=>!s.befejezve);
+  const [form,setForm] = useState({
+    tipus:'Kénezés', stadium_nev: (aktualisStadium && aktualisStadium.nev) || '', kezeloanyag_id:'',
+    mennyiseg:'', mertekegyseg:'', datum: new Date().toISOString().slice(0,10), vegezte:'', megjegyzes:''
+  });
+  const [mentes,setMentes] = useState(false);
+  const tipusok = ['Kénezés','Fejtés','Derítés','Savkorrekció','Cukrozás','Élesztő beoltás','MLF beoltás','Szűrés','Hőmérséklet beállítás','Egyéb'];
+
+  const valasztottAnyag = kezeloanyagok.find(k=>k.id===form.kezeloanyag_id);
+
+  useEffect(()=>{
+    if(valasztottAnyag) setForm(f=>({...f,mertekegyseg:valasztottAnyag.mertekegyseg||f.mertekegyseg}));
+  },[form.kezeloanyag_id]);
+
+  const submit = async ()=>{
+    if(!form.tipus) return;
+    setMentes(true);
+    await sbInsert('kezelesek',{
+      tetel_id: tetel.id,
+      stadium_nev: form.stadium_nev||null,
+      tipus: form.tipus,
+      kezeloanyag_id: form.kezeloanyag_id||null,
+      mennyiseg: form.mennyiseg? parseFloat(form.mennyiseg): null,
+      mertekegyseg: form.mertekegyseg||null,
+      datum: form.datum,
+      vegezte: form.vegezte||null,
+      megjegyzes: form.megjegyzes||null
+    });
+    setMentes(false);
+    onCreated();
+  };
+
+  return (
+    <ModalShell title="Kezelés rögzítése" onClose={onClose}>
+      <div style={{display:'flex',gap:10}}>
+        <Field label="Típus">
+          <select style={inputStyle} value={form.tipus} onChange={e=>setForm({...form,tipus:e.target.value})}>
+            {tipusok.map(t=><option key={t} value={t}>{t}</option>)}
+          </select>
+        </Field>
+        <Field label="Dátum"><input type="date" style={inputStyle} value={form.datum} onChange={e=>setForm({...form,datum:e.target.value})} /></Field>
+      </div>
+      <Field label="Stádium">
+        <select style={inputStyle} value={form.stadium_nev} onChange={e=>setForm({...form,stadium_nev:e.target.value})}>
+          <option value="">— nincs megadva —</option>
+          {stadiumok.map(s=><option key={s.id} value={s.nev}>{s.nev}</option>)}
+        </select>
+      </Field>
+      <Field label="Kezelőanyag (opcionális)">
+        <select style={inputStyle} value={form.kezeloanyag_id} onChange={e=>setForm({...form,kezeloanyag_id:e.target.value})}>
+          <option value="">— nincs anyag —</option>
+          {kezeloanyagok.map(k=><option key={k.id} value={k.id}>{k.nev} {k.kategoria?`(${k.kategoria})`:''}</option>)}
+        </select>
+      </Field>
+      <div style={{display:'flex',gap:10}}>
+        <Field label="Mennyiség"><input type="number" step="any" style={inputStyle} value={form.mennyiseg} onChange={e=>setForm({...form,mennyiseg:e.target.value})} /></Field>
+        <Field label="Mértékegység"><input style={inputStyle} value={form.mertekegyseg} onChange={e=>setForm({...form,mertekegyseg:e.target.value})} placeholder="g/hl, ml/hl…" /></Field>
+      </div>
+      <Field label="Végezte (opcionális)">
+        <input style={inputStyle} value={form.vegezte} onChange={e=>setForm({...form,vegezte:e.target.value})} placeholder="Név" />
+      </Field>
+      <Field label="Megjegyzés (opcionális)">
+        <textarea style={{...inputStyle,minHeight:60,resize:'vertical'}} value={form.megjegyzes} onChange={e=>setForm({...form,megjegyzes:e.target.value})} />
+      </Field>
+      <button onClick={submit} disabled={mentes} style={{
+        width:'100%', marginTop:8, background:'var(--wine)', color:'#fff', border:'none',
+        borderRadius:6, padding:'11px', fontWeight:700, fontSize:14, cursor:'pointer', opacity: mentes ? .5 : 1
+      }}>{mentes?'Mentés…':'Kezelés mentése'}</button>
+    </ModalShell>
+  );
+}
+
+// ---------- Modal: Új analitikai mérés ----------
+function UjAnalitikaModal({tetel,onClose,onCreated}){
+  const [form,setForm] = useState({
+    datum:new Date().toISOString().slice(0,10), cukorfok:'', ph:'', sav:'',
+    so2_szabad:'', so2_osszes:'', alkohol:'', homerseklet:'', megjegyzes:''
+  });
+  const [mentes,setMentes] = useState(false);
+
+  const submit = async ()=>{
+    setMentes(true);
+    const numOrNull = v => v===''? null : parseFloat(v);
+    await sbInsert('analitikak',{
+      tetel_id: tetel.id,
+      datum: form.datum,
+      cukorfok: numOrNull(form.cukorfok),
+      ph: numOrNull(form.ph),
+      sav: numOrNull(form.sav),
+      so2_szabad: numOrNull(form.so2_szabad),
+      so2_osszes: numOrNull(form.so2_osszes),
+      alkohol: numOrNull(form.alkohol),
+      homerseklet: numOrNull(form.homerseklet),
+      megjegyzes: form.megjegyzes||null
+    });
+    setMentes(false);
+    onCreated();
+  };
+
+  return (
+    <ModalShell title="Analitikai mérés rögzítése" onClose={onClose} width={480}>
+      <Field label="Dátum"><input type="date" style={inputStyle} value={form.datum} onChange={e=>setForm({...form,datum:e.target.value})} /></Field>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+        <Field label="Cukorfok"><input type="number" step="any" style={inputStyle} value={form.cukorfok} onChange={e=>setForm({...form,cukorfok:e.target.value})} /></Field>
+        <Field label="pH"><input type="number" step="any" style={inputStyle} value={form.ph} onChange={e=>setForm({...form,ph:e.target.value})} /></Field>
+        <Field label="Sav (g/l)"><input type="number" step="any" style={inputStyle} value={form.sav} onChange={e=>setForm({...form,sav:e.target.value})} /></Field>
+        <Field label="Hőmérséklet (°C)"><input type="number" step="any" style={inputStyle} value={form.homerseklet} onChange={e=>setForm({...form,homerseklet:e.target.value})} /></Field>
+        <Field label="SO2 szabad (mg/l)"><input type="number" step="any" style={inputStyle} value={form.so2_szabad} onChange={e=>setForm({...form,so2_szabad:e.target.value})} /></Field>
+        <Field label="SO2 összes (mg/l)"><input type="number" step="any" style={inputStyle} value={form.so2_osszes} onChange={e=>setForm({...form,so2_osszes:e.target.value})} /></Field>
+        <Field label="Alkohol (%)"><input type="number" step="any" style={inputStyle} value={form.alkohol} onChange={e=>setForm({...form,alkohol:e.target.value})} /></Field>
+      </div>
+      <Field label="Megjegyzés (opcionális)">
+        <textarea style={{...inputStyle,minHeight:60,resize:'vertical'}} value={form.megjegyzes} onChange={e=>setForm({...form,megjegyzes:e.target.value})} />
+      </Field>
+      <button onClick={submit} disabled={mentes} style={{
+        width:'100%', marginTop:8, background:'var(--leaf)', color:'#fff', border:'none',
+        borderRadius:6, padding:'11px', fontWeight:700, fontSize:14, cursor:'pointer', opacity: mentes ? .5 : 1
+      }}>{mentes?'Mentés…':'Mérés mentése'}</button>
+    </ModalShell>
+  );
+}
+
+// ============================================================
+// EDÉNY (TARTÁLY/HORDÓ) LELTÁR
+// ============================================================
+const EDENY_SZIN = {'Acél':'#8FA6B0','Műanyag':'#A8B89A','Fa':'#8B4513'};
+
+function EdenyekNezet({edenyek,edenyTartalom,tetelek,onReload}){
+  const [ujEdenyNyitva,setUjEdenyNyitva] = useState(false);
+  const [kivalasztottEdeny,setKivalasztottEdeny] = useState(null);
+  const [muveletModal,setMuveletModal] = useState(null); // 'betoltes' | 'fejtes' | 'szetfejtes' | 'osszefejtes' | 'hazasitas' | null
+
+  const tartalomByEdeny = (edenyId) => edenyTartalom.find(t=>t.edeny_id===edenyId);
+
+  return (
+    <div style={{flex:1, padding:'24px 32px', overflowY:'auto', background:'var(--cream)'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div className="display" style={{fontSize:22,fontWeight:600}}>Edények (tartályok és hordók)</div>
+        <button onClick={()=>setUjEdenyNyitva(true)} style={{
+          background:'var(--must)', color:'var(--ink)', border:'none', borderRadius:6,
+          padding:'9px 16px', fontWeight:700, fontSize:14, cursor:'pointer'
+        }}>+ Új edény</button>
+      </div>
+
+      {edenyek.length===0 ? (
+        <UresAllapot szoveg="Még nincs felvitt edény. Hozz létre egyet a '+ Új edény' gombbal." />
+      ) : (
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:14}}>
+          {edenyek.map(e=>{
+            const tartalom = tartalomByEdeny(e.id);
+            const tetelNev = tartalom && tartalom.tetelek ? tartalom.tetelek.azonosito : '';
+            const agSuffix = (tartalom && tartalom.agazat) ? `/${tartalom.agazat}` : '';
+            const szinAlap = EDENY_SZIN[e.tipus] || '#999';
+            const kitoltott = tartalom ? (tartalom.mennyiseg_liter / e.kapacitas_liter * 100) : 0;
+            return (
+              <div key={e.id} onClick={()=>setKivalasztottEdeny(e.id===kivalasztottEdeny?null:e.id)} style={{
+                background:'var(--paper)', border: kivalasztottEdeny===e.id ? '2px solid var(--must)' : '1px solid var(--line)',
+                borderRadius:10, padding:'16px 18px', cursor:'pointer'
+              }}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                  <div>
+                    <div className="display" style={{fontWeight:600,fontSize:16}}>{e.nev}</div>
+                    <div style={{fontSize:11.5,color:'var(--ink-soft)',marginTop:2}}>{e.tipus} · {e.kapacitas_liter} l{e.helyszin?` · ${e.helyszin}`:''}</div>
+                  </div>
+                  <div style={{width:10,height:10,borderRadius:'50%',background:szinAlap,marginTop:4}}></div>
+                </div>
+
+                <div style={{marginTop:12, background:'#EEEAE0', borderRadius:6, height:8, overflow:'hidden'}}>
+                  <div style={{height:'100%', width:`${Math.min(kitoltott,100)}%`, background: tartalom ? 'var(--leaf)' : 'transparent'}}></div>
+                </div>
+
+                <div style={{marginTop:10}}>
+                  {tartalom ? (
+                    <>
+                      <div style={{fontWeight:700,fontSize:14,color:'var(--wine)'}}>{tetelNev}{agSuffix}</div>
+                      <div className="mono" style={{fontSize:12,color:'var(--ink-soft)',marginTop:2}}>{tartalom.mennyiseg_liter} l / {e.kapacitas_liter} l</div>
+                    </>
+                  ) : (
+                    <div style={{fontSize:13,color:'var(--ink-soft)',fontStyle:'italic'}}>Üres</div>
+                  )}
+                </div>
+
+                {kivalasztottEdeny===e.id && (
+                  <div style={{marginTop:14, paddingTop:12, borderTop:'1px solid var(--line)', display:'flex',flexWrap:'wrap',gap:6}} onClick={ev=>ev.stopPropagation()}>
+                    {!tartalom && (
+                      <button onClick={()=>setMuveletModal({tipus:'betoltes', edeny:e})} style={btnMini}>Betöltés</button>
+                    )}
+                    {tartalom && (
+                      <>
+                        <button onClick={()=>setMuveletModal({tipus:'fejtes', edeny:e, tartalom})} style={btnMini}>Fejtés másik edénybe</button>
+                        <button onClick={()=>setMuveletModal({tipus:'szetfejtes', edeny:e, tartalom})} style={btnMini}>Szétfejtés</button>
+                        <button onClick={()=>setMuveletModal({tipus:'hazasitas', edeny:e, tartalom})} style={btnMini}>Házasítás</button>
+                        <button onClick={()=>setMuveletModal({tipus:'kiurit', edeny:e, tartalom})} style={{...btnMini,color:'var(--wine)'}}>Kiürítés</button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {ujEdenyNyitva && (
+        <UjEdenyModal onClose={()=>setUjEdenyNyitva(false)} onCreated={()=>{ onReload(); setUjEdenyNyitva(false); }} />
+      )}
+      {muveletModal && (
+        <EdenyMuveletModal
+          muvelet={muveletModal}
+          edenyek={edenyek}
+          edenyTartalom={edenyTartalom}
+          tetelek={tetelek}
+          onClose={()=>setMuveletModal(null)}
+          onDone={()=>{ onReload(); setMuveletModal(null); setKivalasztottEdeny(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+const btnMini = {
+  background:'transparent', border:'1px solid var(--line)', borderRadius:6,
+  padding:'6px 10px', fontSize:12.5, fontWeight:600, cursor:'pointer', color:'var(--ink)'
+};
+
+function UjEdenyModal({onClose,onCreated}){
+  const [form,setForm] = useState({nev:'',tipus:'Acél',kapacitas_liter:'',helyszin:'',megjegyzes:''});
+  const [tipusok,setTipusok] = useState(['Acél','Műanyag','Fa']);
+  const [ujTipus,setUjTipus] = useState('');
+  const [mentes,setMentes] = useState(false);
+
+  const submit = async ()=>{
+    if(!form.nev || !form.kapacitas_liter) return;
+    setMentes(true);
+    await sbInsert('edenyek',{
+      nev: form.nev, tipus: form.tipus, kapacitas_liter: parseFloat(form.kapacitas_liter),
+      helyszin: form.helyszin||null, megjegyzes: form.megjegyzes||null
+    });
+    setMentes(false);
+    onCreated();
+  };
+
+  const tipusHozzaad = () => {
+    if(ujTipus.trim() && !tipusok.includes(ujTipus.trim())){
+      setTipusok([...tipusok, ujTipus.trim()]);
+      setForm({...form, tipus: ujTipus.trim()});
+      setUjTipus('');
+    }
+  };
+
+  return (
+    <ModalShell title="Új edény létrehozása" onClose={onClose}>
+      <Field label="Edény neve">
+        <input style={inputStyle} placeholder="pl. Acéltartály 3" value={form.nev} onChange={e=>setForm({...form,nev:e.target.value})} />
+      </Field>
+      <Field label="Típus">
+        <select style={inputStyle} value={form.tipus} onChange={e=>setForm({...form,tipus:e.target.value})}>
+          {tipusok.map(t=><option key={t} value={t}>{t}</option>)}
+        </select>
+      </Field>
+      <div style={{display:'flex',gap:8,marginBottom:14}}>
+        <input style={{...inputStyle,flex:1}} placeholder="Új típus hozzáadása…" value={ujTipus} onChange={e=>setUjTipus(e.target.value)} />
+        <button onClick={tipusHozzaad} style={{...btnMini, padding:'9px 14px'}}>+ Hozzáad</button>
+      </div>
+      <Field label="Kapacitás (liter)">
+        <input type="number" style={inputStyle} value={form.kapacitas_liter} onChange={e=>setForm({...form,kapacitas_liter:e.target.value})} />
+      </Field>
+      <Field label="Helyszín (opcionális)">
+        <input style={inputStyle} placeholder="pl. Pince A sor" value={form.helyszin} onChange={e=>setForm({...form,helyszin:e.target.value})} />
+      </Field>
+      <Field label="Megjegyzés (opcionális)">
+        <textarea style={{...inputStyle,minHeight:50,resize:'vertical'}} value={form.megjegyzes} onChange={e=>setForm({...form,megjegyzes:e.target.value})} />
+      </Field>
+      <button onClick={submit} disabled={mentes || !form.nev || !form.kapacitas_liter} style={{
+        width:'100%', marginTop:8, background:'var(--ink)', color:'var(--cream)', border:'none',
+        borderRadius:6, padding:'11px', fontWeight:700, fontSize:14, cursor:'pointer',
+        opacity: (mentes || !form.nev || !form.kapacitas_liter) ? .5 : 1
+      }}>{mentes?'Mentés…':'Edény létrehozása'}</button>
+    </ModalShell>
+  );
+}
+
+// ---------- Edény-művelet modal: betöltés / fejtés / szétfejtés / házasítás / kiürítés ----------
+function EdenyMuveletModal({muvelet,edenyek,edenyTartalom,tetelek,onClose,onDone}){
+  const {tipus, edeny, tartalom} = muvelet;
+  const [mentes,setMentes] = useState(false);
+
+  // --- BETÖLTÉS: üres edénybe tétel betöltése ---
+  const [betoltesTetelId,setBetoltesTetelId] = useState('');
+  const [betoltesMennyiseg,setBetoltesMennyiseg] = useState('');
+
+  const betoltesSubmit = async ()=>{
+    if(!betoltesTetelId || !betoltesMennyiseg) return;
+    setMentes(true);
+    await sbInsert('edeny_tartalom',{ edeny_id: edeny.id, tetel_id: betoltesTetelId, mennyiseg_liter: parseFloat(betoltesMennyiseg) });
+    await sbInsert('edeny_mozgasok',{ tipus:'Betöltés', cel_edeny_id: edeny.id, tetel_id: betoltesTetelId, mennyiseg_liter: parseFloat(betoltesMennyiseg) });
+    setMentes(false);
+    onDone();
+  };
+
+  // --- FEJTÉS: teljes mennyiség átkerül egy másik (üres) edénybe ---
+  const ureseEdenyek = edenyek.filter(e => e.id!==(edeny && edeny.id) && !edenyTartalom.find(t=>t.edeny_id===e.id));
+  const [fejtesCelEdeny,setFejtesCelEdeny] = useState('');
+
+  const fejtesSubmit = async ()=>{
+    if(!fejtesCelEdeny || !tartalom) return;
+    setMentes(true);
+    await sbInsert('edeny_tartalom',{ edeny_id: fejtesCelEdeny, tetel_id: tartalom.tetel_id, agazat: tartalom.agazat||null, mennyiseg_liter: tartalom.mennyiseg_liter });
+    await sbDelete('edeny_tartalom', tartalom.id);
+    await sbInsert('edeny_mozgasok',{ tipus:'Fejtés', forras_edeny_id: edeny.id, cel_edeny_id: fejtesCelEdeny, tetel_id: tartalom.tetel_id, mennyiseg_liter: tartalom.mennyiseg_liter });
+    setMentes(false);
+    onDone();
+  };
+
+  // --- SZÉTFEJTÉS: a jelenlegi edény tartalma 2+ edénybe oszlik, /1 /2 jelöléssel ---
+  const [szetfejtesSorok,setSzetfejtesSorok] = useState([{edeny_id:'',mennyiseg:''},{edeny_id:'',mennyiseg:''}]);
+
+  const szetfejtesSorHozzaad = () => setSzetfejtesSorok([...szetfejtesSorok, {edeny_id:'',mennyiseg:''}]);
+  const szetfejtesSorValt = (i,key,val) => {
+    const uj = [...szetfejtesSorok]; uj[i] = {...uj[i], [key]:val}; setSzetfejtesSorok(uj);
+  };
+  const szetfejtesOsszeg = szetfejtesSorok.reduce((sum,s)=> sum + (parseFloat(s.mennyiseg)||0), 0);
+
+  const szetfejtesSubmit = async () => {
+    const ervenyesSorok = szetfejtesSorok.filter(s=>s.edeny_id && s.mennyiseg);
+    if(ervenyesSorok.length < 2) return;
+    setMentes(true);
+    const alapAgazat = tartalom.agazat ? tartalom.agazat : '';
+    for(let i=0;i<ervenyesSorok.length;i++){
+      const ujAg = alapAgazat ? `${alapAgazat}.${i+1}` : String(i+1);
+      await sbInsert('edeny_tartalom',{
+        edeny_id: ervenyesSorok[i].edeny_id, tetel_id: tartalom.tetel_id,
+        agazat: ujAg, mennyiseg_liter: parseFloat(ervenyesSorok[i].mennyiseg)
+      });
+      await sbInsert('edeny_mozgasok',{
+        tipus:'Szétfejtés', forras_edeny_id: edeny.id, cel_edeny_id: ervenyesSorok[i].edeny_id,
+        tetel_id: tartalom.tetel_id, mennyiseg_liter: parseFloat(ervenyesSorok[i].mennyiseg)
+      });
+    }
+    await sbDelete('edeny_tartalom', tartalom.id);
+    setMentes(false);
+    onDone();
+  };
+
+  // --- HÁZASÍTÁS: ez az edény + egy másik (más tételt tartalmazó) edény tartalma összeolvad, új tétel jön létre ---
+  const masikTetelesEdeny = edenyTartalom.filter(t => t.edeny_id!==(edeny && edeny.id) && t.tetel_id!==(tartalom && tartalom.tetel_id));
+  const [hazasitasMasikId,setHazasitasMasikId] = useState('');
+  const [hazasitasUjAzonosito,setHazasitasUjAzonosito] = useState('');
+  const [hazasitasCelEdeny,setHazasitasCelEdeny] = useState('');
+
+  const hazasitasSubmit = async () => {
+    const masik = edenyTartalom.find(t=>t.id===hazasitasMasikId);
+    if(!masik || !hazasitasUjAzonosito || !hazasitasCelEdeny) return;
+    setMentes(true);
+    const sajatTetel = tetelek.find(t=>t.id===tartalom.tetel_id);
+    const ossz = tartalom.mennyiseg_liter + masik.mennyiseg_liter;
+
+    const ujak = await sbInsert('tetelek',{
+      azonosito: hazasitasUjAzonosito,
+      evjarat: (sajatTetel && sajatTetel.evjarat) || new Date().getFullYear(),
+      fajta: 'Házasítás / cuvée',
+      borfajta: (sajatTetel && sajatTetel.borfajta) || 'Fehérbor',
+      jelenlegi_stadium_sorrend: 1,
+      allapot: 'aktív',
+      megjegyzes: `Házasítva: ${tartalom.mennyiseg_liter} l + ${masik.mennyiseg_liter} l`
+    });
+
+    if(ujak && ujak[0]){
+      const ujTetelId = ujak[0].id;
+      await sbInsert('tetel_szarmazas',{ uj_tetel_id: ujTetelId, forras_tetel_id: tartalom.tetel_id, mennyiseg_liter: tartalom.mennyiseg_liter });
+      await sbInsert('tetel_szarmazas',{ uj_tetel_id: ujTetelId, forras_tetel_id: masik.tetel_id, mennyiseg_liter: masik.mennyiseg_liter });
+
+      await sbInsert('edeny_tartalom',{ edeny_id: hazasitasCelEdeny, tetel_id: ujTetelId, mennyiseg_liter: ossz });
+      await sbDelete('edeny_tartalom', tartalom.id);
+      await sbDelete('edeny_tartalom', masik.id);
+
+      await sbInsert('edeny_mozgasok',{ tipus:'Házasítás', cel_edeny_id: hazasitasCelEdeny, tetel_id: ujTetelId, mennyiseg_liter: ossz, megjegyzes:`Forrás tételek összeházasítva` });
+
+      // eredeti tételeket lezárjuk, mert felszívódtak az új tételbe
+      await sbUpdate('tetelek', tartalom.tetel_id, {allapot:'lezárt'});
+      await sbUpdate('tetelek', masik.tetel_id, {allapot:'lezárt'});
+    }
+    setMentes(false);
+    onDone();
+  };
+
+  // --- KIÜRÍTÉS: tartalom eltávolítása anélkül, hogy másik edénybe kerülne (pl. minta, selejt) ---
+  const kiuritesSubmit = async () => {
+    setMentes(true);
+    await sbInsert('edeny_mozgasok',{ tipus:'Kiürítés', forras_edeny_id: edeny.id, tetel_id: tartalom.tetel_id, mennyiseg_liter: tartalom.mennyiseg_liter });
+    await sbDelete('edeny_tartalom', tartalom.id);
+    setMentes(false);
+    onDone();
+  };
+
+  const cimek = {betoltes:'Edény betöltése', fejtes:'Fejtés másik edénybe', szetfejtes:'Szétfejtés több edénybe', hazasitas:'Házasítás (cuvée)', kiurit:'Edény kiürítése'};
+
+  return (
+    <ModalShell title={cimek[tipus]} onClose={onClose} width={tipus==='szetfejtes' ? 520 : 460}>
+      {tipus==='betoltes' && (
+        <>
+          <Field label="Melyik tételt töltjük be?">
+            <select style={inputStyle} value={betoltesTetelId} onChange={e=>setBetoltesTetelId(e.target.value)}>
+              <option value="">— válassz tételt —</option>
+              {tetelek.filter(t=>t.allapot==='aktív').map(t=><option key={t.id} value={t.id}>{t.azonosito} ({t.fajta})</option>)}
+            </select>
+          </Field>
+          <Field label={`Mennyiség (liter, max ${edeny.kapacitas_liter} l)`}>
+            <input type="number" style={inputStyle} value={betoltesMennyiseg} onChange={e=>setBetoltesMennyiseg(e.target.value)} />
+          </Field>
+          <button onClick={betoltesSubmit} disabled={mentes || !betoltesTetelId || !betoltesMennyiseg} style={primaryBtn(mentes)}>{mentes?'Mentés…':'Betöltés rögzítése'}</button>
+        </>
+      )}
+
+      {tipus==='fejtes' && (
+        <>
+          <div style={{fontSize:13,color:'var(--ink-soft)',marginBottom:14}}>
+            Áthelyezed: <b>{tartalom.mennyiseg_liter} l</b> ebből az edényből ({edeny.nev}) egy másik, üres edénybe.
+          </div>
+          <Field label="Cél edény (csak üres edények)">
+            <select style={inputStyle} value={fejtesCelEdeny} onChange={e=>setFejtesCelEdeny(e.target.value)}>
+              <option value="">— válassz edényt —</option>
+              {ureseEdenyek.map(e=><option key={e.id} value={e.id}>{e.nev} ({e.kapacitas_liter} l)</option>)}
+            </select>
+          </Field>
+          {ureseEdenyek.length===0 && <div style={{fontSize:12.5,color:'var(--wine)',marginBottom:10}}>Nincs üres edény. Hozz létre egy újat, vagy üresíts ki egyet.</div>}
+          <button onClick={fejtesSubmit} disabled={mentes || !fejtesCelEdeny} style={primaryBtn(mentes)}>{mentes?'Mentés…':'Fejtés rögzítése'}</button>
+        </>
+      )}
+
+      {tipus==='szetfejtes' && (
+        <>
+          <div style={{fontSize:13,color:'var(--ink-soft)',marginBottom:14}}>
+            Az edényben lévő <b>{tartalom.mennyiseg_liter} l</b> szétosztása több edénybe. A tétel neve <b>/1, /2</b> jelölést kap minden ágon.
+          </div>
+          {szetfejtesSorok.map((s,i)=>(
+            <div key={i} style={{display:'flex',gap:8,marginBottom:10,alignItems:'flex-end'}}>
+              <div style={{flex:1}}>
+                <label style={{display:'block',fontSize:12,fontWeight:600,color:'var(--ink-soft)',marginBottom:5}}>Cél edény {i+1}</label>
+                <select style={inputStyle} value={s.edeny_id} onChange={e=>szetfejtesSorValt(i,'edeny_id',e.target.value)}>
+                  <option value="">— válassz —</option>
+                  {edenyek.filter(e=>e.id!==edeny.id).map(e=><option key={e.id} value={e.id}>{e.nev} ({e.kapacitas_liter} l)</option>)}
+                </select>
+              </div>
+              <div style={{width:110}}>
+                <label style={{display:'block',fontSize:12,fontWeight:600,color:'var(--ink-soft)',marginBottom:5}}>Liter</label>
+                <input type="number" style={inputStyle} value={s.mennyiseg} onChange={e=>szetfejtesSorValt(i,'mennyiseg',e.target.value)} />
+              </div>
+            </div>
+          ))}
+          <button onClick={szetfejtesSorHozzaad} style={{...btnMini, marginBottom:14}}>+ További ág hozzáadása</button>
+          <div className="mono" style={{fontSize:12.5, color: szetfejtesOsszeg>tartalom.mennyiseg_liter ? 'var(--wine)' : 'var(--ink-soft)', marginBottom:14}}>
+            Összesen elosztva: {szetfejtesOsszeg} l / {tartalom.mennyiseg_liter} l
+          </div>
+          <button onClick={szetfejtesSubmit} disabled={mentes} style={primaryBtn(mentes)}>{mentes?'Mentés…':'Szétfejtés rögzítése'}</button>
+        </>
+      )}
+
+      {tipus==='hazasitas' && (
+        <>
+          <div style={{fontSize:13,color:'var(--ink-soft)',marginBottom:14}}>
+            Ez az edény ({edeny.nev}) tartalmát összeházasítod egy másik, eltérő tételt tartalmazó edénnyel. Ez egy <b>új tételt</b> hoz létre.
+          </div>
+          <Field label="Melyik másik edénnyel házasítod?">
+            <select style={inputStyle} value={hazasitasMasikId} onChange={e=>setHazasitasMasikId(e.target.value)}>
+              <option value="">— válassz —</option>
+              {masikTetelesEdeny.map(t=>{
+                const e2 = edenyek.find(e=>e.id===t.edeny_id);
+                const tet = tetelek.find(tt=>tt.id===t.tetel_id);
+                return <option key={t.id} value={t.id}>{e2 ? e2.nev : ''} — {tet ? tet.azonosito : ''} ({t.mennyiseg_liter} l)</option>;
+              })}
+            </select>
+          </Field>
+          <Field label="Új tétel azonosítója">
+            <input style={inputStyle} placeholder="pl. 2026-CUVEE-01" value={hazasitasUjAzonosito} onChange={e=>setHazasitasUjAzonosito(e.target.value)} />
+          </Field>
+          <Field label="Melyik edénybe kerüljön a házasított bor?">
+            <select style={inputStyle} value={hazasitasCelEdeny} onChange={e=>setHazasitasCelEdeny(e.target.value)}>
+              <option value="">— válassz —</option>
+              <option value={edeny.id}>{edeny.nev} (jelenlegi)</option>
+              {hazasitasMasikId && (()=>{ const t=edenyTartalom.find(x=>x.id===hazasitasMasikId); const e2=edenyek.find(e=>e.id===(t && t.edeny_id)); return e2 ? <option value={e2.id}>{e2.nev}</option> : null; })()}
+              {edenyek.filter(e=>e.id!==edeny.id && !edenyTartalom.find(t=>t.edeny_id===e.id)).map(e=><option key={e.id} value={e.id}>{e.nev} (üres)</option>)}
+            </select>
+          </Field>
+          <button onClick={hazasitasSubmit} disabled={mentes || !hazasitasMasikId || !hazasitasUjAzonosito || !hazasitasCelEdeny} style={primaryBtn(mentes)}>{mentes?'Mentés…':'Házasítás rögzítése'}</button>
+        </>
+      )}
+
+      {tipus==='kiurit' && (
+        <>
+          <div style={{fontSize:13,color:'var(--ink-soft)',marginBottom:18}}>
+            Biztosan kiüríted ezt az edényt? A tartalom ({tartalom.mennyiseg_liter} l) eltávolításra kerül, anélkül hogy másik edénybe kerülne (pl. minta, selejt, próbafejtés).
+          </div>
+          <button onClick={kiuritesSubmit} disabled={mentes} style={{...primaryBtn(mentes), background:'var(--wine)'}}>{mentes?'Mentés…':'Kiürítés megerősítése'}</button>
+        </>
+      )}
+    </ModalShell>
+  );
+}
+
+function primaryBtn(mentes){
+  return {
+    width:'100%', marginTop:4, background:'var(--ink)', color:'var(--cream)', border:'none',
+    borderRadius:6, padding:'11px', fontWeight:700, fontSize:14, cursor:'pointer', opacity: mentes ? .5 : 1
+  };
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
