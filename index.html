@@ -181,30 +181,42 @@ function App(){
   return (
     <div style={{display:'flex',minHeight:'100vh',flexDirection:'column'}}>
       <Header onUjTetel={()=>setUjTetelNyitva(true)} onExport={()=>setExportNyitva(true)} nezet={nezet} setNezet={setNezet} />
-      {nezet==='tetelek' ? (
+      {nezet==='tetelek' && (
         <div style={{display:'flex',flex:1,minHeight:0}}>
-          <Sidebar
-            tetelek={tetelekSzurve}
-            kivalasztott={kivalasztott}
-            onValaszt={setKivalasztott}
-            szuro={szuro}
-            setSzuro={setSzuro}
-            loading={loading}
-          />
-          <MainPanel
-            tetel={tetelek.find(t=>t.id===kivalasztott)}
-            sablonok={sablonok}
-            kezeloanyagok={kezeloanyagok}
-            edenyek={edenyek}
-            edenyTartalom={edenyTartalom}
-            onReload={loadAll}
-          />
+          <div className={kivalasztott ? 'sidebar-wrap sidebar-hide-mobile' : 'sidebar-wrap'}>
+            <Sidebar
+              tetelek={tetelekSzurve}
+              kivalasztott={kivalasztott}
+              onValaszt={setKivalasztott}
+              szuro={szuro}
+              setSzuro={setSzuro}
+              loading={loading}
+            />
+          </div>
+          <div className={kivalasztott ? 'mainpanel-wrap' : 'mainpanel-wrap mainpanel-hide-mobile'} style={{flex:1,minWidth:0}}>
+            <MainPanel
+              tetel={tetelek.find(t=>t.id===kivalasztott)}
+              sablonok={sablonok}
+              kezeloanyagok={kezeloanyagok}
+              edenyek={edenyek}
+              edenyTartalom={edenyTartalom}
+              onReload={loadAll}
+              onVissza={()=>setKivalasztott(null)}
+            />
+          </div>
         </div>
-      ) : (
+      )}
+      {nezet==='edenyek' && (
         <EdenyekNezet
           edenyek={edenyek}
           edenyTartalom={edenyTartalom}
           tetelek={tetelek}
+          onReload={loadAll}
+        />
+      )}
+      {nezet==='kezeloanyagok' && (
+        <KezeloanyagokNezet
+          kezeloanyagok={kezeloanyagok}
           onReload={loadAll}
         />
       )}
@@ -221,52 +233,103 @@ function App(){
           onClose={()=>setExportNyitva(false)}
         />
       )}
+      <style>{`
+        @media (max-width: 720px){
+          .sidebar-hide-mobile{ display:none !important; }
+          .mainpanel-hide-mobile{ display:none !important; }
+          .sidebar-aside{ width:100% !important; min-width:0 !important; }
+          .vissza-gomb-mobil{ display:inline-flex !important; }
+        }
+      `}</style>
     </div>
   );
 }
 
 function Header({onUjTetel,onExport,nezet,setNezet}){
+  const [menuNyitva,setMenuNyitva] = useState(false);
+
+  const navGombok = (
+    <>
+      <div style={{display:'flex',gap:4,background:'rgba(255,255,255,0.08)',borderRadius:8,padding:3}}>
+        <button onClick={()=>{setNezet('tetelek');setMenuNyitva(false);}} style={{
+          background: nezet==='tetelek' ? 'var(--must)' : 'transparent',
+          color: nezet==='tetelek' ? 'var(--ink)' : 'var(--cream)',
+          border:'none', borderRadius:6, padding:'7px 14px', fontWeight:600, fontSize:13, cursor:'pointer'
+        }}>Tételek</button>
+        <button onClick={()=>{setNezet('edenyek');setMenuNyitva(false);}} style={{
+          background: nezet==='edenyek' ? 'var(--must)' : 'transparent',
+          color: nezet==='edenyek' ? 'var(--ink)' : 'var(--cream)',
+          border:'none', borderRadius:6, padding:'7px 14px', fontWeight:600, fontSize:13, cursor:'pointer'
+        }}>Edények</button>
+        <button onClick={()=>{setNezet('kezeloanyagok');setMenuNyitva(false);}} style={{
+          background: nezet==='kezeloanyagok' ? 'var(--must)' : 'transparent',
+          color: nezet==='kezeloanyagok' ? 'var(--ink)' : 'var(--cream)',
+          border:'none', borderRadius:6, padding:'7px 14px', fontWeight:600, fontSize:13, cursor:'pointer'
+        }}>Kezelőanyagok</button>
+      </div>
+      <button onClick={()=>{onExport();setMenuNyitva(false);}} style={{
+        background:'transparent', color:'var(--cream)', border:'1px solid rgba(255,255,255,0.25)', borderRadius:6,
+        padding:'9px 14px', fontWeight:600, fontSize:13, cursor:'pointer'
+      }}>⬇ Export Excelbe</button>
+      {nezet==='tetelek' && (
+        <button onClick={()=>{onUjTetel();setMenuNyitva(false);}} style={{
+          background:'var(--must)', color:'var(--ink)', border:'none', borderRadius:6,
+          padding:'9px 16px', fontWeight:700, fontSize:14, cursor:'pointer'
+        }}>+ Új tétel</button>
+      )}
+    </>
+  );
+
   return (
     <header style={{
-      background:'var(--ink)', color:'var(--cream)', padding:'18px 24px',
-      display:'flex', alignItems:'center', justifyContent:'space-between',
-      borderBottom:'3px solid var(--must)', flexWrap:'wrap', gap:12
+      background:'var(--ink)', color:'var(--cream)', padding:'14px 18px',
+      borderBottom:'3px solid var(--must)', position:'relative', zIndex:200
     }}>
-      <div style={{display:'flex',alignItems:'baseline',gap:10}}>
-        <span className="display" style={{fontSize:24,fontWeight:600,letterSpacing:'.01em'}}>Pincekönyv</span>
-        <span style={{fontSize:12,color:'var(--must)',fontFamily:"'JetBrains Mono',monospace",letterSpacing:'.05em'}}>SZŐLŐTŐL PALACKIG</span>
-      </div>
-      <div style={{display:'flex',alignItems:'center',gap:14}}>
-        <div style={{display:'flex',gap:4,background:'rgba(255,255,255,0.08)',borderRadius:8,padding:3}}>
-          <button onClick={()=>setNezet('tetelek')} style={{
-            background: nezet==='tetelek' ? 'var(--must)' : 'transparent',
-            color: nezet==='tetelek' ? 'var(--ink)' : 'var(--cream)',
-            border:'none', borderRadius:6, padding:'7px 14px', fontWeight:600, fontSize:13, cursor:'pointer'
-          }}>Tételek</button>
-          <button onClick={()=>setNezet('edenyek')} style={{
-            background: nezet==='edenyek' ? 'var(--must)' : 'transparent',
-            color: nezet==='edenyek' ? 'var(--ink)' : 'var(--cream)',
-            border:'none', borderRadius:6, padding:'7px 14px', fontWeight:600, fontSize:13, cursor:'pointer'
-          }}>Edények</button>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <div style={{display:'flex',alignItems:'baseline',gap:10,minWidth:0,overflow:'hidden'}}>
+          <span className="display" style={{fontSize:22,fontWeight:600,letterSpacing:'.01em',whiteSpace:'nowrap'}}>Pincekönyv</span>
+          <span className="header-subtitle" style={{fontSize:12,color:'var(--must)',fontFamily:"'JetBrains Mono',monospace",letterSpacing:'.05em',whiteSpace:'nowrap'}}>SZŐLŐTŐL PALACKIG</span>
         </div>
-        <button onClick={onExport} style={{
-          background:'transparent', color:'var(--cream)', border:'1px solid rgba(255,255,255,0.25)', borderRadius:6,
-          padding:'9px 14px', fontWeight:600, fontSize:13, cursor:'pointer'
-        }}>⬇ Export Excelbe</button>
-        {nezet==='tetelek' && (
-          <button onClick={onUjTetel} style={{
-            background:'var(--must)', color:'var(--ink)', border:'none', borderRadius:6,
-            padding:'9px 16px', fontWeight:700, fontSize:14, cursor:'pointer'
-          }}>+ Új tétel</button>
-        )}
+
+        {/* Desktop nav - elrejtve mobilon */}
+        <div className="header-desktop-nav" style={{display:'flex',alignItems:'center',gap:14}}>
+          {navGombok}
+        </div>
+
+        {/* Hamburger gomb - csak mobilon látszik */}
+        <button className="header-hamburger" onClick={()=>setMenuNyitva(!menuNyitva)} style={{
+          display:'none', background:'rgba(255,255,255,0.1)', border:'none', borderRadius:6,
+          width:38, height:38, color:'var(--cream)', fontSize:20, cursor:'pointer', alignItems:'center', justifyContent:'center'
+        }}>{menuNyitva ? '✕' : '☰'}</button>
       </div>
+
+      {/* Mobil lenyíló menü */}
+      {menuNyitva && (
+        <div className="header-mobile-menu" style={{
+          display:'none', flexDirection:'column', gap:10, marginTop:14, paddingTop:14,
+          borderTop:'1px solid rgba(255,255,255,0.15)'
+        }}>
+          {navGombok}
+        </div>
+      )}
+
+      <style>{`
+        @media (max-width: 720px){
+          .header-desktop-nav{ display:none !important; }
+          .header-hamburger{ display:flex !important; }
+          .header-mobile-menu{ display:flex !important; }
+          .header-mobile-menu > div, .header-mobile-menu > button { width:100%; }
+          .header-mobile-menu > div { flex-direction:column; }
+          .header-subtitle{ display:none; }
+        }
+      `}</style>
     </header>
   );
 }
 
 function Sidebar({tetelek,kivalasztott,onValaszt,szuro,setSzuro,loading}){
   return (
-    <aside style={{
+    <aside className="sidebar-aside" style={{
       width:300, minWidth:300, borderRight:'1px solid var(--line)', background:'var(--paper)',
       overflowY:'auto', display:'flex', flexDirection:'column'
     }}>
@@ -319,7 +382,7 @@ function TetelKartya({tetel,kivalasztva,onClick}){
 }
 
 // ---------- Fő panel ----------
-function MainPanel({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onReload}){
+function MainPanel({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onReload,onVissza}){
   if(!tetel){
     return (
       <main style={{flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--ink-soft)'}}>
@@ -330,10 +393,10 @@ function MainPanel({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onReload}
       </main>
     );
   }
-  return <TetelReszletek tetel={tetel} sablonok={sablonok} kezeloanyagok={kezeloanyagok} edenyek={edenyek} edenyTartalom={edenyTartalom} onReload={onReload} />;
+  return <TetelReszletek tetel={tetel} sablonok={sablonok} kezeloanyagok={kezeloanyagok} edenyek={edenyek} edenyTartalom={edenyTartalom} onReload={onReload} onVissza={onVissza} />;
 }
 
-function TetelReszletek({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onReload}){
+function TetelReszletek({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onReload,onVissza}){
   const [stadiumok,setStadiumok] = useState([]);
   const [kezelesek,setKezelesek] = useState([]);
   const [analitikak,setAnalitikak] = useState([]);
@@ -375,6 +438,10 @@ function TetelReszletek({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onRe
 
   return (
     <main style={{flex:1, overflowY:'auto', padding:'24px 32px', background:'var(--cream)'}}>
+      <button className="vissza-gomb-mobil" onClick={onVissza} style={{
+        display:'none', background:'var(--paper)', border:'1px solid var(--line)', borderRadius:6,
+        padding:'8px 14px', fontSize:13, fontWeight:600, cursor:'pointer', color:'var(--ink)', marginBottom:14
+      }}>← Vissza a tételekhez</button>
       {/* Pincekönyv fejléc kártya */}
       <div style={{
         background:'var(--paper)', border:'1px solid var(--line)', borderRadius:12,
@@ -1468,6 +1535,143 @@ function ExportModal({tetelek,onClose}){
       {hiba && <div style={{fontSize:13,color:'var(--wine)',marginBottom:14}}>{hiba}</div>}
       <button onClick={generalExcel} disabled={generalas} style={primaryBtn(generalas)}>
         {generalas ? 'Generálás…' : '⬇ Excel letöltése'}
+      </button>
+    </ModalShell>
+  );
+}
+
+// ============================================================
+// KEZELŐANYAGOK – lista / hozzáadás / szerkesztés / törlés
+// ============================================================
+function KezeloanyagokNezet({kezeloanyagok,onReload}){
+  const [ujNyitva,setUjNyitva] = useState(false);
+  const [szerkesztett,setSzerkesztett] = useState(null);
+  const [torlendoId,setTorlendoId] = useState(null);
+  const [mentes,setMentes] = useState(false);
+
+  const torles = async (id) => {
+    setMentes(true);
+    await sbDelete('kezeloanyagok', id);
+    setMentes(false);
+    setTorlendoId(null);
+    onReload();
+  };
+
+  const csoportok = {};
+  kezeloanyagok.forEach(k=>{
+    const kat = k.kategoria || 'Egyéb';
+    if(!csoportok[kat]) csoportok[kat] = [];
+    csoportok[kat].push(k);
+  });
+
+  return (
+    <div style={{flex:1, padding:'24px 32px', overflowY:'auto', background:'var(--cream)'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20,flexWrap:'wrap',gap:10}}>
+        <div className="display" style={{fontSize:22,fontWeight:600}}>Kezelőanyag-katalógus</div>
+        <button onClick={()=>setUjNyitva(true)} style={{
+          background:'var(--must)', color:'var(--ink)', border:'none', borderRadius:6,
+          padding:'9px 16px', fontWeight:700, fontSize:14, cursor:'pointer'
+        }}>+ Új kezelőanyag</button>
+      </div>
+
+      {kezeloanyagok.length===0 ? (
+        <UresAllapot szoveg="Még nincs felvitt kezelőanyag. Hozz létre egyet a '+ Új kezelőanyag' gombbal." />
+      ) : (
+        Object.keys(csoportok).sort().map(kat=>(
+          <div key={kat} style={{marginBottom:22}}>
+            <div style={{fontSize:12.5, fontWeight:700, color:'var(--ink-soft)', textTransform:'uppercase', letterSpacing:'.04em', marginBottom:8}}>{kat}</div>
+            <div style={{display:'flex',flexDirection:'column',gap:6}}>
+              {csoportok[kat].map(k=>(
+                <div key={k.id} style={{
+                  display:'flex', justifyContent:'space-between', alignItems:'center',
+                  background:'var(--paper)', border:'1px solid var(--line)', borderRadius:8, padding:'10px 14px'
+                }}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:14}}>{k.nev}</div>
+                    {k.mertekegyseg && <div className="mono" style={{fontSize:12,color:'var(--ink-soft)',marginTop:2}}>Mértékegység: {k.mertekegyseg}</div>}
+                    {k.megjegyzes && <div style={{fontSize:12.5,color:'var(--ink-soft)',marginTop:2}}>{k.megjegyzes}</div>}
+                  </div>
+                  <div style={{display:'flex',gap:6,flexShrink:0}}>
+                    <button onClick={()=>setSzerkesztett(k)} style={btnMini}>✎ Szerkesztés</button>
+                    {torlendoId===k.id ? (
+                      <>
+                        <button onClick={()=>torles(k.id)} disabled={mentes} style={{...btnMini,color:'#fff',background:'var(--wine)',borderColor:'var(--wine)'}}>Biztos?</button>
+                        <button onClick={()=>setTorlendoId(null)} style={btnMini}>Mégse</button>
+                      </>
+                    ) : (
+                      <button onClick={()=>setTorlendoId(k.id)} style={{...btnMini,color:'var(--wine)'}}>🗑</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))
+      )}
+
+      {(ujNyitva || szerkesztett) && (
+        <KezeloanyagModal
+          kezeloanyag={szerkesztett}
+          onClose={()=>{ setUjNyitva(false); setSzerkesztett(null); }}
+          onSaved={()=>{ onReload(); setUjNyitva(false); setSzerkesztett(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function KezeloanyagModal({kezeloanyag,onClose,onSaved}){
+  const szerkesztes = !!kezeloanyag;
+  const [form,setForm] = useState(szerkesztes ? {
+    nev: kezeloanyag.nev||'', kategoria: kezeloanyag.kategoria||'', mertekegyseg: kezeloanyag.mertekegyseg||'', megjegyzes: kezeloanyag.megjegyzes||''
+  } : {nev:'',kategoria:'',mertekegyseg:'',megjegyzes:''});
+  const [mentes,setMentes] = useState(false);
+  const [hiba,setHiba] = useState('');
+
+  const mertekegysegek = ['g/hl','ml/hl','kg/hl','g','ml','kg','l','db','%'];
+  const kategoriak = ['Kénezés','Derítés','Enzim','Élesztő','Élesztő tápanyag','Savkorrekció','Cukrozás','MLF','Mikrobiológiai stabilizálás','Egyéb'];
+
+  const submit = async ()=>{
+    if(!form.nev) return;
+    setMentes(true);
+    setHiba('');
+    if(szerkesztes){
+      await sbUpdate('kezeloanyagok', kezeloanyag.id, {
+        nev: form.nev, kategoria: form.kategoria||null, mertekegyseg: form.mertekegyseg||null, megjegyzes: form.megjegyzes||null
+      });
+    } else {
+      const eredmeny = await sbInsert('kezeloanyagok', {
+        nev: form.nev, kategoria: form.kategoria||null, mertekegyseg: form.mertekegyseg||null, megjegyzes: form.megjegyzes||null
+      });
+      if(!eredmeny){ setHiba('Mentés sikertelen — lehet, hogy már létezik ilyen nevű anyag.'); setMentes(false); return; }
+    }
+    setMentes(false);
+    onSaved();
+  };
+
+  return (
+    <ModalShell title={szerkesztes ? "Kezelőanyag szerkesztése" : "Új kezelőanyag"} onClose={onClose}>
+      <Field label="Név">
+        <input style={inputStyle} placeholder="pl. Bentonit" value={form.nev} onChange={e=>setForm({...form,nev:e.target.value})} />
+      </Field>
+      <Field label="Kategória">
+        <input style={inputStyle} list="kategoria-lista" placeholder="pl. Derítés" value={form.kategoria} onChange={e=>setForm({...form,kategoria:e.target.value})} />
+        <datalist id="kategoria-lista">
+          {kategoriak.map(k=><option key={k} value={k} />)}
+        </datalist>
+      </Field>
+      <Field label="Mértékegység">
+        <input style={inputStyle} list="mertekegyseg-lista" placeholder="pl. g/hl" value={form.mertekegyseg} onChange={e=>setForm({...form,mertekegyseg:e.target.value})} />
+        <datalist id="mertekegyseg-lista">
+          {mertekegysegek.map(m=><option key={m} value={m} />)}
+        </datalist>
+      </Field>
+      <Field label="Megjegyzés (opcionális)">
+        <textarea style={{...inputStyle,minHeight:50,resize:'vertical'}} value={form.megjegyzes} onChange={e=>setForm({...form,megjegyzes:e.target.value})} />
+      </Field>
+      {hiba && <div style={{fontSize:13,color:'var(--wine)',marginBottom:14}}>{hiba}</div>}
+      <button onClick={submit} disabled={mentes || !form.nev} style={primaryBtn(mentes || !form.nev)}>
+        {mentes ? 'Mentés…' : (szerkesztes ? 'Módosítások mentése' : 'Kezelőanyag létrehozása')}
       </button>
     </ModalShell>
   );
