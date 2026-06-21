@@ -80,6 +80,96 @@ async function sbDelete(table,id){
   }catch(e){ badge('offline-badge',2500); return false; }
 }
 
+// ============================================================
+// EGYSZERŰ DOCX GENERÁTOR (JSZip-pel, kézzel épített OOXML)
+// Bemenet: blocks tömb, elemei: {type:'h1'|'h2'|'p'|'table', text, rows}
+// ============================================================
+function escapeXml(s){
+  return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+}
+function docxParagraph(text, style){
+  const pPr = style ? `<w:pPr><w:pStyle w:val="${style}"/></w:pPr>` : '';
+  const lines = String(text==null?'':text).split('\n');
+  const runs = lines.map((line,i)=> (i>0?'<w:br/>':'') + `<w:t xml:space="preserve">${escapeXml(line)}</w:t>`).join('');
+  return `<w:p>${pPr}<w:r>${runs}</w:r></w:p>`;
+}
+function docxTable(rows){
+  // rows: array of arrays of strings; first row treated as header (bold + shaded)
+  const colCount = Math.max(...rows.map(r=>r.length));
+  const tableWidth = 9360;
+  const colWidth = Math.floor(tableWidth/colCount);
+  const grid = Array(colCount).fill(`<w:gridCol w:w="${colWidth}"/>`).join('');
+  const trXml = rows.map((row,ri)=>{
+    const isHeader = ri===0;
+    const cells = row.map(cell=>{
+      const shading = isHeader ? '<w:shd w:val="clear" w:color="auto" w:fill="E8E2D4"/>' : '';
+      const bold = isHeader ? '<w:b/>' : '';
+      return `<w:tc><w:tcPr><w:tcW w:w="${colWidth}" w:type="dxa"/>${shading}<w:tcMar><w:top w:w="80" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tcMar></w:tcPr><w:p><w:r><w:rPr>${bold}</w:rPr><w:t xml:space="preserve">${escapeXml(cell)}</w:t></w:r></w:p></w:tc>`;
+    }).join('');
+    return `<w:tr>${cells}</w:tr>`;
+  }).join('');
+  return `<w:tbl><w:tblPr><w:tblW w:w="${tableWidth}" w:type="dxa"/><w:tblBorders>
+    <w:top w:val="single" w:sz="4" w:color="CCCCCC"/><w:start w:val="single" w:sz="4" w:color="CCCCCC"/>
+    <w:bottom w:val="single" w:sz="4" w:color="CCCCCC"/><w:end w:val="single" w:sz="4" w:color="CCCCCC"/>
+    <w:insideH w:val="single" w:sz="4" w:color="CCCCCC"/><w:insideV w:val="single" w:sz="4" w:color="CCCCCC"/>
+  </w:tblBorders></w:tblPr><w:tblGrid>${grid}</w:tblGrid>${trXml}</w:tbl>`;
+}
+async function generateDocx(blocks, filename){
+  const bodyParts = blocks.map(b=>{
+    if(b.type==='h1') return docxParagraph(b.text,'Heading1');
+    if(b.type==='h2') return docxParagraph(b.text,'Heading2');
+    if(b.type==='table') return docxTable(b.rows);
+    return docxParagraph(b.text);
+  }).join('');
+
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:body>${bodyParts}
+<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>
+</w:body></w:document>`;
+
+  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="240" w:after="160"/></w:pPr><w:rPr><w:b/><w:sz w:val="32"/><w:color w:val="5C4A3A"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="200" w:after="120"/></w:pPr><w:rPr><w:b/><w:sz w:val="26"/><w:color w:val="5C4A3A"/></w:rPr></w:style>
+</w:styles>`;
+
+  const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+</Types>`;
+
+  const rootRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`;
+
+  const docRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`;
+
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", contentTypesXml);
+  zip.folder("_rels").file(".rels", rootRelsXml);
+  const wordFolder = zip.folder("word");
+  wordFolder.file("document.xml", documentXml);
+  wordFolder.file("styles.xml", stylesXml);
+  wordFolder.folder("_rels").file("document.xml.rels", docRelsXml);
+
+  const blob = await zip.generateAsync({type:"blob", mimeType:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 5000);
+}
+
 // Realtime websocket — egyszerű broadcast figyelő, amely jelzi ha bármi változott
 let rtCallback=null;
 (function rt(){
@@ -115,6 +205,7 @@ let rtCallback=null;
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
 
 <script type="text/babel" data-presets="react">
@@ -144,22 +235,25 @@ function App(){
   const [loading,setLoading] = useState(true);
   const [ujTetelNyitva,setUjTetelNyitva] = useState(false);
   const [szuro,setSzuro] = useState('mind');
-  const [nezet,setNezet] = useState('tetelek'); // 'tetelek' | 'edenyek'
+  const [nezet,setNezet] = useState('tetelek'); // 'tetelek' | 'edenyek' | 'kezeloanyagok' | 'protokollok'
   const [exportNyitva,setExportNyitva] = useState(false);
+  const [protokollok,setProtokollok] = useState([]);
 
   const loadAll = useCallback(async ()=>{
-    const [tArr, sablonArr, stadiumArr, anyagArr, edenyArr, tartalomArr] = await Promise.all([
+    const [tArr, sablonArr, stadiumArr, anyagArr, edenyArr, tartalomArr, protokollArr] = await Promise.all([
       sbSelect('tetelek','select=*&order=letrehozva.desc'),
       sbSelect('bor_sablonok','select=*'),
       sbSelect('bor_sablon_stadiumok','select=*&order=sorrend.asc'),
       sbSelect('kezeloanyagok','select=*&order=kategoria.asc,nev.asc'),
       sbSelect('edenyek','select=*&order=nev.asc'),
-      sbSelect('edeny_tartalom','select=*,tetelek(azonosito,fajta,borfajta)')
+      sbSelect('edeny_tartalom','select=*,tetelek(azonosito,fajta,borfajta)'),
+      sbSelect('protokollok','select=*&order=modositva.desc')
     ]);
     if(tArr) setTetelek(tArr);
     if(anyagArr) setKezeloanyagok(anyagArr);
     if(edenyArr) setEdenyek(edenyArr);
     if(tartalomArr) setEdenyTartalom(tartalomArr);
+    if(protokollArr) setProtokollok(protokollArr);
     if(sablonArr && stadiumArr){
       const map = {};
       sablonArr.forEach(s=>{
@@ -220,6 +314,14 @@ function App(){
           onReload={loadAll}
         />
       )}
+      {nezet==='protokollok' && (
+        <ProtokollokNezet
+          protokollok={protokollok}
+          kezeloanyagok={kezeloanyagok}
+          tetelek={tetelek}
+          onReload={loadAll}
+        />
+      )}
       {ujTetelNyitva && (
         <UjTetelModal
           sablonok={sablonok}
@@ -266,6 +368,11 @@ function Header({onUjTetel,onExport,nezet,setNezet}){
           color: nezet==='kezeloanyagok' ? 'var(--ink)' : 'var(--cream)',
           border:'none', borderRadius:6, padding:'7px 14px', fontWeight:600, fontSize:13, cursor:'pointer'
         }}>Kezelőanyagok</button>
+        <button onClick={()=>{setNezet('protokollok');setMenuNyitva(false);}} style={{
+          background: nezet==='protokollok' ? 'var(--must)' : 'transparent',
+          color: nezet==='protokollok' ? 'var(--ink)' : 'var(--cream)',
+          border:'none', borderRadius:6, padding:'7px 14px', fontWeight:600, fontSize:13, cursor:'pointer'
+        }}>Protokollok</button>
       </div>
       <button onClick={()=>{onExport();setMenuNyitva(false);}} style={{
         background:'transparent', color:'var(--cream)', border:'1px solid rgba(255,255,255,0.25)', borderRadius:6,
@@ -406,6 +513,70 @@ function TetelReszletek({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onRe
   const [szerkesztesNyitva,setSzerkesztesNyitva] = useState(false);
   const [torlesNyitva,setTorlesNyitva] = useState(false);
   const [torles,setTorles] = useState(false);
+  const [protokollKesz,setProtokollKesz] = useState(false);
+  const [protokollUjId,setProtokollUjId] = useState(null);
+
+  const legyenProtokoll = async () => {
+    setProtokollKesz(false);
+    const ujProt = await sbInsert('protokollok', {
+      nev: `${tetel.azonosito} – örökített protokoll`,
+      fajta: tetel.fajta,
+      bortipus: tetel.borfajta==='Fehérbor'?'Fehér':tetel.borfajta==='Vörösbor'?'Vörös':tetel.borfajta==='Rosé'?'Rosé':tetel.borfajta==='Pezsgő'?'Pezsgő':'Egyéb',
+      allapot: 'piszkozat'
+    });
+    if(!ujProt || !ujProt[0]) return;
+    const protokollId = ujProt[0].id;
+
+    for(let i=0;i<stadiumok.length;i++){
+      const st = stadiumok[i];
+      const ujFazis = await sbInsert('protokoll_fazisok', {
+        protokoll_id: protokollId, nev: st.nev, sorrend: i+1
+      });
+      if(!ujFazis || !ujFazis[0]) continue;
+      const fazisId = ujFazis[0].id;
+
+      // Ehhez a stádiumhoz tartozó kezelések átemelése (érték-szinten, dátum nélkül)
+      const stKezelesek = kezelesek.filter(k=>k.stadium_nev===st.nev);
+      for(let j=0;j<stKezelesek.length;j++){
+        const k = stKezelesek[j];
+        await sbInsert('protokoll_kezelesek', {
+          fazis_id: fazisId, kezeloanyag_id: k.kezeloanyag_id||null,
+          mennyiseg: k.mennyiseg, mertekegyseg: k.mertekegyseg,
+          megjegyzes: k.tipus ? `${k.tipus}${k.megjegyzes?' — '+k.megjegyzes:''}` : (k.megjegyzes||null),
+          sorrend: j
+        });
+      }
+
+      // Ehhez a stádiumhoz időben legközelebb eső analitika átemelése (csak az átfedő mezők)
+      const stKezdete = st.elkezdve ? new Date(st.elkezdve) : null;
+      const stVege = st.befejezve ? new Date(st.befejezve) : null;
+      const relevansAna = analitikak.filter(a=>{
+        const d = new Date(a.datum);
+        if(stKezdete && d < stKezdete) return false;
+        if(stVege && d > stVege) return false;
+        return true;
+      });
+      if(relevansAna.length>0){
+        const a = relevansAna[0];
+        await sbInsert('protokoll_analitikak', {
+          fazis_id: fazisId,
+          cukortartalom: a.cukorfok!=null ? a.cukorfok : null,
+          ph: a.ph, borkosav: null, almasav: null, illosav: null, oechsle: null
+        });
+        const extraReszek = [];
+        if(a.so2_szabad!=null) extraReszek.push(`SO2 szabad: ${a.so2_szabad} mg/l`);
+        if(a.so2_osszes!=null) extraReszek.push(`SO2 összes: ${a.so2_osszes} mg/l`);
+        if(a.alkohol!=null) extraReszek.push(`Alkohol: ${a.alkohol}%`);
+        if(a.homerseklet!=null) extraReszek.push(`Hőmérséklet: ${a.homerseklet}°C`);
+        if(extraReszek.length>0){
+          await sbUpdate('protokoll_fazisok', fazisId, {megjegyzes: extraReszek.join(', ')});
+        }
+      }
+    }
+
+    setProtokollUjId(protokollId);
+    setProtokollKesz(true);
+  };
 
   const tetelTorles = async () => {
     setTorles(true);
@@ -498,11 +669,15 @@ function TetelReszletek({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onRe
               {tetel.mennyiseg_liter ? `  ·  ${tetel.mennyiseg_liter} l` : ''}
             </div>
           </div>
-          <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
             <button onClick={()=>setSzerkesztesNyitva(true)} style={{
               background:'transparent', border:'1px solid var(--line)', borderRadius:6,
               padding:'6px 12px', fontSize:12.5, fontWeight:600, cursor:'pointer', color:'var(--ink-soft)'
             }}>✎ Szerkesztés</button>
+            <button onClick={legyenProtokoll} style={{
+              background:'transparent', border:'1px solid var(--line)', borderRadius:6,
+              padding:'6px 12px', fontSize:12.5, fontWeight:600, cursor:'pointer', color:'var(--ink-soft)'
+            }}>📋 Legyen protokoll</button>
             <button onClick={()=>setTorlesNyitva(true)} style={{
               background:'transparent', border:'1px solid var(--line)', borderRadius:6,
               padding:'6px 12px', fontSize:12.5, fontWeight:600, cursor:'pointer', color:'var(--wine)'
@@ -513,6 +688,13 @@ function TetelReszletek({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onRe
             }}>{tetel.allapot.toUpperCase()}</div>
           </div>
         </div>
+
+        {protokollKesz && (
+          <div style={{marginTop:12, background:'#E8F0E4', color:'var(--leaf)', borderRadius:8, padding:'10px 14px', fontSize:13, fontWeight:600}}>
+            ✓ Protokoll létrehozva ebből a tételből. Megtalálod a "Protokollok" menüpontban.
+            <button onClick={()=>setProtokollKesz(false)} style={{background:'none',border:'none',color:'var(--leaf)',float:'right',cursor:'pointer',fontWeight:700}}>✕</button>
+          </div>
+        )}
 
         {tetel.megjegyzes && (
           <div style={{marginTop:10, fontSize:13, color:'var(--ink-soft)', fontStyle:'italic'}}>{tetel.megjegyzes}</div>
@@ -1738,6 +1920,520 @@ function KezeloanyagModal({kezeloanyag,onClose,onSaved}){
       <button onClick={submit} disabled={mentes || !form.nev} style={primaryBtn(mentes || !form.nev)}>
         {mentes ? 'Mentés…' : (szerkesztes ? 'Módosítások mentése' : 'Kezelőanyag létrehozása')}
       </button>
+    </ModalShell>
+  );
+}
+
+// ============================================================
+// PROTOKOLLOK – technológiai sablon szerkesztő
+// ============================================================
+function ProtokollokNezet({protokollok,kezeloanyagok,tetelek,onReload}){
+  const [megnyitott,setMegnyitott] = useState(null); // protokoll id, amit szerkesztünk
+
+  const ujProtokoll = async () => {
+    const ujak = await sbInsert('protokollok',{nev:'Új protokoll', allapot:'piszkozat'});
+    if(ujak && ujak[0]){
+      onReload();
+      setMegnyitott(ujak[0].id);
+    }
+  };
+
+  if(megnyitott){
+    return (
+      <ProtokollSzerkeszto
+        protokollId={megnyitott}
+        kezeloanyagok={kezeloanyagok}
+        tetelek={tetelek}
+        onVissza={()=>{ setMegnyitott(null); onReload(); }}
+        onReload={onReload}
+      />
+    );
+  }
+
+  return (
+    <div style={{flex:1, padding:'24px 32px', overflowY:'auto', background:'var(--cream)'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20,flexWrap:'wrap',gap:10}}>
+        <div className="display" style={{fontSize:22,fontWeight:600}}>Technológiai protokollok</div>
+        <button onClick={ujProtokoll} style={{
+          background:'var(--must)', color:'var(--ink)', border:'none', borderRadius:6,
+          padding:'9px 16px', fontWeight:700, fontSize:14, cursor:'pointer'
+        }}>+ Új protokoll</button>
+      </div>
+
+      {protokollok.length===0 ? (
+        <UresAllapot szoveg="Még nincs felvitt protokoll. Hozz létre egyet a '+ Új protokoll' gombbal." />
+      ) : (
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:14}}>
+          {protokollok.map(p=>(
+            <div key={p.id} onClick={()=>setMegnyitott(p.id)} style={{
+              background:'var(--paper)', border:'1px solid var(--line)', borderRadius:10,
+              padding:'16px 18px', cursor:'pointer'
+            }}>
+              <div className="display" style={{fontWeight:600,fontSize:16}}>{p.nev}</div>
+              <div style={{fontSize:12,color:'var(--ink-soft)',marginTop:4}}>
+                {p.fajta || ''}{p.fajta && p.bortipus ? ' · ' : ''}{p.bortipus || ''}
+              </div>
+              <div style={{marginTop:10, display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                <span style={{
+                  fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:12,
+                  background: p.allapot==='kész' ? 'var(--leaf)' : '#EEEAE0',
+                  color: p.allapot==='kész' ? '#fff' : 'var(--ink-soft)'
+                }}>{p.allapot==='kész' ? 'KÉSZ' : 'PISZKOZAT'}</span>
+                <span className="mono" style={{fontSize:11,color:'var(--ink-soft)'}}>{fmtDate(p.modositva)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProtokollSzerkeszto({protokollId,kezeloanyagok,tetelek,onVissza,onReload}){
+  const [protokoll,setProtokoll] = useState(null);
+  const [fazisok,setFazisok] = useState([]); // each: {fazis, parameterek:[], analitika, kezelesek:[]}
+  const [loading,setLoading] = useState(true);
+  const [torlesNyitva,setTorlesNyitva] = useState(false);
+  const [exportFolyamatban,setExportFolyamatban] = useState(false);
+  const [hozzarendelesNyitva,setHozzarendelesNyitva] = useState(false);
+  const saveTimer = useRef(null);
+
+  const load = useCallback(async ()=>{
+    const [protArr, fazisArr, paramArr, anaArr, kezArr] = await Promise.all([
+      sbSelect('protokollok', `select=*&id=eq.${protokollId}`),
+      sbSelect('protokoll_fazisok', `select=*&protokoll_id=eq.${protokollId}&order=sorrend.asc`),
+      sbSelect('protokoll_parameterek', `select=*&order=sorrend.asc`),
+      sbSelect('protokoll_analitikak', `select=*`),
+      sbSelect('protokoll_kezelesek', `select=*,kezeloanyagok(nev,kategoria,mertekegyseg)&order=sorrend.asc`)
+    ]);
+    if(protArr && protArr[0]) setProtokoll(protArr[0]);
+    const fzk = fazisArr || [];
+    const fazisIdk = fzk.map(f=>f.id);
+    const merged = fzk.map(f=>({
+      fazis: f,
+      parameterek: (paramArr||[]).filter(p=>p.fazis_id===f.id),
+      analitika: (anaArr||[]).find(a=>a.fazis_id===f.id) || null,
+      kezelesek: (kezArr||[]).filter(k=>k.fazis_id===f.id)
+    }));
+    setFazisok(merged);
+    setLoading(false);
+  },[protokollId]);
+
+  useEffect(()=>{ load(); },[load]);
+
+  const protokollFrissit = async (mezok) => {
+    setProtokoll(p=>({...p, ...mezok}));
+    await sbUpdate('protokollok', protokollId, {...mezok, modositva: new Date().toISOString()});
+  };
+
+  const ujFazisHozzaad = async () => {
+    const sorrend = fazisok.length+1;
+    const ujak = await sbInsert('protokoll_fazisok',{protokoll_id: protokollId, nev:`${sorrend}. Új fázis`, sorrend});
+    if(ujak) load();
+  };
+
+  const fazisTorles = async (fazisId) => {
+    await sbDelete('protokoll_fazisok', fazisId);
+    load();
+  };
+
+  const fazisMasol = async (fazisAdat) => {
+    const sorrend = fazisok.length+1;
+    const ujak = await sbInsert('protokoll_fazisok',{protokoll_id: protokollId, nev: fazisAdat.fazis.nev+' (másolat)', sorrend, megjegyzes: fazisAdat.fazis.megjegyzes||null});
+    if(ujak && ujak[0]){
+      const ujFazisId = ujak[0].id;
+      for(const p of fazisAdat.parameterek){
+        await sbInsert('protokoll_parameterek',{fazis_id: ujFazisId, nev:p.nev, ertek:p.ertek, sorrend:p.sorrend});
+      }
+      if(fazisAdat.analitika){
+        const {id,fazis_id,letrehozva,...rest} = fazisAdat.analitika;
+        await sbInsert('protokoll_analitikak',{fazis_id: ujFazisId, ...rest});
+      }
+      for(const k of fazisAdat.kezelesek){
+        await sbInsert('protokoll_kezelesek',{fazis_id: ujFazisId, kezeloanyag_id:k.kezeloanyag_id, mennyiseg:k.mennyiseg, mertekegyseg:k.mertekegyseg, megjegyzes:k.megjegyzes, sorrend:k.sorrend});
+      }
+      load();
+    }
+  };
+
+  const exportWord = async () => {
+    setExportFolyamatban(true);
+    const blocks = [];
+    blocks.push({type:'h1', text: protokoll.nev || 'Protokoll'});
+    const metaLines = [];
+    if(protokoll.fajta) metaLines.push(`Fajta: ${protokoll.fajta}`);
+    if(protokoll.bortipus) metaLines.push(`Bortípus: ${protokoll.bortipus}`);
+    if(metaLines.length) blocks.push({type:'p', text: metaLines.join('\n')});
+
+    fazisok.forEach(fz=>{
+      blocks.push({type:'h2', text: fz.fazis.nev});
+
+      if(fz.parameterek.length>0){
+        const rows = [['Paraméter','Érték']];
+        fz.parameterek.forEach(p=> rows.push([p.nev||'', p.ertek||'']));
+        blocks.push({type:'table', rows});
+      }
+
+      if(fz.analitika){
+        const a = fz.analitika;
+        const rows = [['Mutató','Érték']];
+        if(a.oechsle!=null) rows.push(['Érettség (°Oechsle)', String(a.oechsle)]);
+        if(a.cukortartalom!=null) rows.push(['Cukortartalom (g/l)', String(a.cukortartalom)]);
+        if(a.ph!=null) rows.push(['pH', String(a.ph)]);
+        if(a.borkosav!=null) rows.push(['Borkősav (g/l)', String(a.borkosav)]);
+        if(a.almasav!=null) rows.push(['Almasav (g/l)', String(a.almasav)]);
+        if(a.illosav!=null) rows.push(['Illósav (g/l)', String(a.illosav)]);
+        if(rows.length>1) blocks.push({type:'table', rows});
+      }
+
+      if(fz.kezelesek.length>0){
+        const rows = [['Kezelőanyag','Mennyiség','Mértékegység','Megjegyzés']];
+        fz.kezelesek.forEach(k=>{
+          rows.push([(k.kezeloanyagok&&k.kezeloanyagok.nev)||'', k.mennyiseg!=null?String(k.mennyiseg):'', k.mertekegyseg||'', k.megjegyzes||'']);
+        });
+        blocks.push({type:'table', rows});
+      }
+
+      if(fz.fazis.megjegyzes){
+        blocks.push({type:'p', text: `Megjegyzés: ${fz.fazis.megjegyzes}`});
+      }
+    });
+
+    const safeName = (protokoll.nev||'protokoll').replace(/[^a-zA-Z0-9áéíóöőúüűÁÉÍÓÖŐÚÜŰ \-]/g,'').trim() || 'protokoll';
+    await generateDocx(blocks, `${safeName}.docx`);
+    setExportFolyamatban(false);
+  };
+
+  const protokollTorles = async () => {
+    await sbDelete('protokollok', protokollId);
+    onVissza();
+  };
+
+  if(loading || !protokoll){
+    return <div style={{flex:1, padding:'24px 32px'}}>Betöltés…</div>;
+  }
+
+  return (
+    <div style={{flex:1, padding:'24px 32px', overflowY:'auto', background:'var(--cream)'}}>
+      <button onClick={onVissza} style={{
+        background:'var(--paper)', border:'1px solid var(--line)', borderRadius:6,
+        padding:'8px 14px', fontSize:13, fontWeight:600, cursor:'pointer', color:'var(--ink)', marginBottom:16
+      }}>← Vissza a protokollokhoz</button>
+
+      <div style={{
+        background:'var(--paper)', border:'1px solid var(--line)', borderRadius:12,
+        padding:'18px 22px', marginBottom:20
+      }}>
+        <div style={{display:'flex',gap:10,marginBottom:10,flexWrap:'wrap'}}>
+          <input
+            value={protokoll.nev||''}
+            onChange={e=>protokollFrissit({nev:e.target.value})}
+            placeholder="Protokoll neve (pl. Sauvignon Blanc – kézi szüret)"
+            className="display"
+            style={{flex:'2 1 240px', fontSize:19, fontWeight:600, border:'none', borderBottom:'1px dashed var(--line)', padding:'4px 2px', background:'transparent', color:'var(--ink)'}}
+          />
+        </div>
+        <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+          <input
+            value={protokoll.fajta||''}
+            onChange={e=>protokollFrissit({fajta:e.target.value})}
+            placeholder="Szőlőfajta"
+            style={{...inputStyle, flex:'1 1 160px'}}
+          />
+          <select
+            value={protokoll.bortipus||''}
+            onChange={e=>protokollFrissit({bortipus:e.target.value})}
+            style={{...inputStyle, flex:'1 1 140px'}}
+          >
+            <option value="">Bortípus…</option>
+            <option>Fehér</option><option>Vörös</option><option>Rosé</option><option>Pezsgő</option><option>Egyéb</option>
+          </select>
+          <select
+            value={protokoll.allapot||'piszkozat'}
+            onChange={e=>protokollFrissit({allapot:e.target.value})}
+            style={{...inputStyle, flex:'0 1 140px'}}
+          >
+            <option value="piszkozat">Piszkozat</option>
+            <option value="kész">Kész</option>
+          </select>
+        </div>
+        <div style={{display:'flex',gap:8,marginTop:14,flexWrap:'wrap'}}>
+          <button onClick={()=>setHozzarendelesNyitva(true)} style={btnMini}>📎 Hozzárendelés tételhez</button>
+          <button onClick={exportWord} disabled={exportFolyamatban} style={{...btnMini, opacity: exportFolyamatban ? .5 : 1}}>{exportFolyamatban ? 'Generálás…' : '⬇ Export Word-be'}</button>
+          <button onClick={()=>setTorlesNyitva(true)} style={{...btnMini, color:'var(--wine)'}}>🗑 Protokoll törlése</button>
+        </div>
+      </div>
+
+      {fazisok.map((fz,idx)=>(
+        <FazisKartya
+          key={fz.fazis.id}
+          fazisAdat={fz}
+          index={idx}
+          kezeloanyagok={kezeloanyagok}
+          onReload={load}
+          onTorles={()=>fazisTorles(fz.fazis.id)}
+          onMasol={()=>fazisMasol(fz)}
+        />
+      ))}
+
+      <button onClick={ujFazisHozzaad} style={{
+        display:'block', width:'100%', background:'var(--paper)', border:'1px dashed var(--line)',
+        color:'var(--ink)', fontWeight:600, padding:'14px', fontSize:14, borderRadius:10, cursor:'pointer', marginTop:8
+      }}>+ Új fázis hozzáadása</button>
+
+      {torlesNyitva && (
+        <ModalShell title="Protokoll törlése" onClose={()=>setTorlesNyitva(false)}>
+          <div style={{fontSize:14,marginBottom:18}}>
+            Biztosan törlöd a <b>{protokoll.nev}</b> protokollt? Ez minden fázist, paramétert és kezelőanyag-bejegyzést is töröl. <b>Ez nem vonható vissza.</b>
+          </div>
+          <div style={{display:'flex',gap:10}}>
+            <button onClick={()=>setTorlesNyitva(false)} style={{flex:1, background:'transparent', border:'1px solid var(--line)', borderRadius:6, padding:'11px', fontWeight:600, fontSize:14, cursor:'pointer', color:'var(--ink)'}}>Mégse</button>
+            <button onClick={protokollTorles} style={{flex:1, background:'var(--wine)', color:'#fff', border:'none', borderRadius:6, padding:'11px', fontWeight:700, fontSize:14, cursor:'pointer'}}>Igen, törlöm</button>
+          </div>
+        </ModalShell>
+      )}
+
+      {hozzarendelesNyitva && (
+        <ProtokollHozzarendelesModal
+          protokollId={protokollId}
+          tetelek={tetelek}
+          onClose={()=>setHozzarendelesNyitva(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function FazisKartya({fazisAdat,index,kezeloanyagok,onReload,onTorles,onMasol}){
+  const {fazis, parameterek, analitika, kezelesek} = fazisAdat;
+  const [nev,setNev] = useState(fazis.nev);
+  const [megjegyzes,setMegjegyzes] = useState(fazis.megjegyzes||'');
+  const nevTimer = useRef(null);
+  const megjTimer = useRef(null);
+
+  const nevValt = (v) => {
+    setNev(v);
+    clearTimeout(nevTimer.current);
+    nevTimer.current = setTimeout(()=> sbUpdate('protokoll_fazisok', fazis.id, {nev:v}), 600);
+  };
+  const megjValt = (v) => {
+    setMegjegyzes(v);
+    clearTimeout(megjTimer.current);
+    megjTimer.current = setTimeout(()=> sbUpdate('protokoll_fazisok', fazis.id, {megjegyzes:v||null}), 600);
+  };
+
+  const paramHozzaad = async () => {
+    await sbInsert('protokoll_parameterek',{fazis_id: fazis.id, nev:'', ertek:'', sorrend: parameterek.length});
+    onReload();
+  };
+  const paramFrissit = async (id, mezok) => { await sbUpdate('protokoll_parameterek', id, mezok); };
+  const paramTorles = async (id) => { await sbDelete('protokoll_parameterek', id); onReload(); };
+
+  const anaFrissit = async (mezok) => {
+    if(analitika){
+      await sbUpdate('protokoll_analitikak', analitika.id, mezok);
+    } else {
+      await sbInsert('protokoll_analitikak', {fazis_id: fazis.id, ...mezok});
+      onReload();
+    }
+  };
+
+  const kezelesHozzaad = async () => {
+    await sbInsert('protokoll_kezelesek',{fazis_id: fazis.id, sorrend: kezelesek.length});
+    onReload();
+  };
+  const kezelesFrissit = async (id, mezok) => { await sbUpdate('protokoll_kezelesek', id, mezok); };
+  const kezelesTorles = async (id) => { await sbDelete('protokoll_kezelesek', id); onReload(); };
+
+  const [analitikaNyitva,setAnalitikaNyitva] = useState(!!analitika);
+
+  return (
+    <div style={{background:'var(--paper)', border:'1px solid var(--line)', borderRadius:10, padding:'16px 18px', marginBottom:14}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
+        <input
+          value={nev}
+          onChange={e=>nevValt(e.target.value)}
+          style={{flex:1, fontSize:15, fontWeight:600, border:'none', borderBottom:'1px dashed var(--line)', padding:'4px 2px', background:'transparent', color:'var(--ink)'}}
+        />
+        <div style={{display:'flex',gap:6,flexShrink:0}}>
+          <button onClick={onMasol} title="Másolás" style={btnMini}>⎘</button>
+          <button onClick={onTorles} title="Törlés" style={{...btnMini, color:'var(--wine)'}}>✕</button>
+        </div>
+      </div>
+
+      {/* Szabad paraméterek */}
+      {parameterek.length>0 && (
+        <div style={{marginTop:12, display:'flex', flexDirection:'column', gap:6}}>
+          {parameterek.map(p=>(
+            <ParamSor key={p.id} param={p} onFrissit={(mezok)=>paramFrissit(p.id,mezok)} onTorles={()=>paramTorles(p.id)} />
+          ))}
+        </div>
+      )}
+      <button onClick={paramHozzaad} style={{background:'none',border:'none',color:'var(--ink-soft)',fontSize:12.5,padding:'6px 0',cursor:'pointer'}}>+ paraméter hozzáadása</button>
+
+      {/* Analitika (opcionális, kinyitható) */}
+      {!analitikaNyitva ? (
+        <button onClick={()=>setAnalitikaNyitva(true)} style={{background:'none',border:'none',color:'var(--ink-soft)',fontSize:12.5,padding:'4px 0',cursor:'pointer',display:'block'}}>+ analitika hozzáadása ehhez a fázishoz</button>
+      ) : (
+        <div style={{marginTop:10, borderTop:'1px dashed var(--line)', paddingTop:10}}>
+          <div style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.04em',color:'var(--ink-soft)',marginBottom:8}}>Analitika</div>
+          <AnalitikaRacs analitika={analitika} onFrissit={anaFrissit} />
+        </div>
+      )}
+
+      {/* Kezelőanyagok */}
+      <div style={{marginTop:12, borderTop:'1px dashed var(--line)', paddingTop:10}}>
+        <div style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.04em',color:'var(--ink-soft)',marginBottom:8}}>Kezelőanyagok ehhez a fázishoz</div>
+        {kezelesek.map(k=>(
+          <KezelesSor key={k.id} kezeles={k} kezeloanyagok={kezeloanyagok} onFrissit={(mezok)=>kezelesFrissit(k.id,mezok)} onTorles={()=>kezelesTorles(k.id)} />
+        ))}
+        <button onClick={kezelesHozzaad} style={{background:'none',border:'none',color:'var(--ink-soft)',fontSize:12.5,padding:'6px 0',cursor:'pointer'}}>+ kezelőanyag hozzáadása</button>
+      </div>
+
+      {/* Szabad megjegyzés */}
+      <div style={{marginTop:10}}>
+        <textarea
+          value={megjegyzes}
+          onChange={e=>megjValt(e.target.value)}
+          placeholder="Szabad szöveges megjegyzés ehhez a fázishoz…"
+          style={{...inputStyle, minHeight:40, resize:'vertical', fontSize:13}}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ParamSor({param,onFrissit,onTorles}){
+  const [nev,setNev] = useState(param.nev||'');
+  const [ertek,setErtek] = useState(param.ertek||'');
+  const timer = useRef(null);
+
+  const valt = (mezo, v) => {
+    if(mezo==='nev') setNev(v); else setErtek(v);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(()=> onFrissit(mezo==='nev' ? {nev:v} : {ertek:v}), 500);
+  };
+
+  return (
+    <div style={{display:'flex',gap:8,alignItems:'center'}}>
+      <input value={nev} onChange={e=>valt('nev',e.target.value)} placeholder="Paraméter neve" style={{...inputStyle,flex:1,fontSize:13}} />
+      <input value={ertek} onChange={e=>valt('ertek',e.target.value)} placeholder="Érték" style={{...inputStyle,flex:1,fontSize:13}} />
+      <span onClick={onTorles} style={{color:'var(--ink-soft)',cursor:'pointer',fontSize:14,padding:'0 4px'}}>✕</span>
+    </div>
+  );
+}
+
+function AnalitikaRacs({analitika,onFrissit}){
+  const mezok = ['oechsle','cukortartalom','ph','borkosav','almasav','illosav'];
+  const cimkek = {oechsle:'°Oechsle', cukortartalom:'Cukortartalom (g/l)', ph:'pH', borkosav:'Borkősav (g/l)', almasav:'Almasav (g/l)', illosav:'Illósav (g/l)'};
+  const [ertekek,setErtekek] = useState(()=>{
+    const init = {};
+    mezok.forEach(m=> init[m] = analitika ? (analitika[m]!=null?String(analitika[m]):'') : '');
+    return init;
+  });
+  const timer = useRef(null);
+
+  const valt = (mezo, v) => {
+    setErtekek(prev=>({...prev,[mezo]:v}));
+    clearTimeout(timer.current);
+    timer.current = setTimeout(()=>{
+      const num = v===''? null : parseFloat(v);
+      onFrissit({[mezo]: num});
+    }, 500);
+  };
+
+  return (
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:8}}>
+      {mezok.map(m=>(
+        <div key={m}>
+          <label style={{display:'block',fontSize:11,color:'var(--ink-soft)',marginBottom:3}}>{cimkek[m]}</label>
+          <input type="number" step="any" value={ertekek[m]} onChange={e=>valt(m,e.target.value)} style={{...inputStyle,fontSize:13}} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function KezelesSor({kezeles,kezeloanyagok,onFrissit,onTorles}){
+  const [kezeloanyagId,setKezeloanyagId] = useState(kezeles.kezeloanyag_id||'');
+  const [mennyiseg,setMennyiseg] = useState(kezeles.mennyiseg!=null?String(kezeles.mennyiseg):'');
+  const [mertekegyseg,setMertekegyseg] = useState(kezeles.mertekegyseg||'');
+  const [megjegyzes,setMegjegyzes] = useState(kezeles.megjegyzes||'');
+  const timer = useRef(null);
+
+  const valasztValt = (id) => {
+    setKezeloanyagId(id);
+    const anyag = kezeloanyagok.find(k=>k.id===id);
+    if(anyag && anyag.mertekegyseg) setMertekegyseg(anyag.mertekegyseg);
+    onFrissit({kezeloanyag_id: id||null, mertekegyseg: (anyag&&anyag.mertekegyseg)||mertekegyseg||null});
+  };
+
+  const debounced = (mezo, v, setter) => {
+    setter(v);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(()=> onFrissit({[mezo]: mezo==='mennyiseg' ? (v===''?null:parseFloat(v)) : (v||null)}), 500);
+  };
+
+  return (
+    <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:6,flexWrap:'wrap'}}>
+      <select value={kezeloanyagId} onChange={e=>valasztValt(e.target.value)} style={{...inputStyle,flex:'1.6 1 140px',fontSize:12.5}}>
+        <option value="">— válassz kezelőanyagot —</option>
+        {kezeloanyagok.map(k=><option key={k.id} value={k.id}>{k.nev}</option>)}
+      </select>
+      <input value={mennyiseg} onChange={e=>debounced('mennyiseg',e.target.value,setMennyiseg)} placeholder="Menny." style={{...inputStyle,flex:'0.6 1 60px',fontSize:12.5}} />
+      <input value={mertekegyseg} onChange={e=>debounced('mertekegyseg',e.target.value,setMertekegyseg)} placeholder="Mértékegys." style={{...inputStyle,flex:'0.7 1 70px',fontSize:12.5}} />
+      <input value={megjegyzes} onChange={e=>debounced('megjegyzes',e.target.value,setMegjegyzes)} placeholder="Megjegyzés" style={{...inputStyle,flex:'1.4 1 100px',fontSize:12.5}} />
+      <span onClick={onTorles} style={{color:'var(--ink-soft)',cursor:'pointer',fontSize:14,padding:'0 4px'}}>✕</span>
+    </div>
+  );
+}
+
+function ProtokollHozzarendelesModal({protokollId,tetelek,onClose}){
+  const [tetelId,setTetelId] = useState('');
+  const [mentes,setMentes] = useState(false);
+  const [hozzarendelve,setHozzarendelve] = useState([]);
+
+  useEffect(()=>{
+    sbSelect('tetel_protokollok', `select=*,tetelek(azonosito)&protokoll_id=eq.${protokollId}`).then(r=>{ if(r) setHozzarendelve(r); });
+  },[protokollId]);
+
+  const submit = async () => {
+    if(!tetelId) return;
+    setMentes(true);
+    await sbInsert('tetel_protokollok',{tetel_id: tetelId, protokoll_id: protokollId});
+    const r = await sbSelect('tetel_protokollok', `select=*,tetelek(azonosito)&protokoll_id=eq.${protokollId}`);
+    if(r) setHozzarendelve(r);
+    setMentes(false);
+    setTetelId('');
+  };
+
+  const eltavolit = async (id) => {
+    await sbDelete('tetel_protokollok', id);
+    setHozzarendelve(prev=>prev.filter(h=>h.id!==id));
+  };
+
+  return (
+    <ModalShell title="Protokoll hozzárendelése tételhez" onClose={onClose}>
+      <div style={{fontSize:13,color:'var(--ink-soft)',marginBottom:14}}>
+        Rendeld hozzá ezt a protokollt egy vagy több tételhez, hogy nyomon kövesd, melyik tétel melyik technológiai sablon szerint készül.
+      </div>
+      {hozzarendelve.length>0 && (
+        <div style={{marginBottom:14, display:'flex', flexDirection:'column', gap:6}}>
+          {hozzarendelve.map(h=>(
+            <div key={h.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:'#EEEAE0',borderRadius:6,padding:'6px 10px'}}>
+              <span style={{fontSize:13,fontWeight:600}}>{(h.tetelek&&h.tetelek.azonosito)||'?'}</span>
+              <span onClick={()=>eltavolit(h.id)} style={{cursor:'pointer',color:'var(--ink-soft)'}}>✕</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <Field label="Tétel hozzárendelése">
+        <select style={inputStyle} value={tetelId} onChange={e=>setTetelId(e.target.value)}>
+          <option value="">— válassz tételt —</option>
+          {tetelek.filter(t=>!hozzarendelve.find(h=>h.tetel_id===t.id)).map(t=><option key={t.id} value={t.id}>{t.azonosito}</option>)}
+        </select>
+      </Field>
+      <button onClick={submit} disabled={mentes || !tetelId} style={primaryBtn(mentes || !tetelId)}>{mentes?'Mentés…':'Hozzárendelés'}</button>
     </ModalShell>
   );
 }
