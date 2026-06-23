@@ -590,7 +590,7 @@ function TetelReszletek({tetel,sablonok,kezeloanyagok,edenyek,edenyTartalom,onRe
   const load = useCallback(async ()=>{
     const [st, kz, an] = await Promise.all([
       sbSelect('tetel_stadiumok', `select=*&tetel_id=eq.${tetel.id}&order=sorrend.asc`),
-      sbSelect('kezelesek', `select=*,kezeloanyagok(nev)&tetel_id=eq.${tetel.id}&order=datum.desc,letrehozva.desc`),
+      sbSelect('kezelesek', `select=*,kezeloanyagok(nev,kiszereles_mennyiseg,kiszereles_egyseg,kiszereles_ar,penznem)&tetel_id=eq.${tetel.id}&order=datum.desc,letrehozva.desc`),
       sbSelect('analitikak', `select=*&tetel_id=eq.${tetel.id}&order=datum.desc`)
     ]);
     if(st) setStadiumok(st);
@@ -890,19 +890,23 @@ function KezelesLista({kezelesek}){
   if(kezelesek.length===0) return <UresAllapot szoveg="Még nincs rögzített kezelés. Add hozzá az elsőt a gombbal." />;
   return (
     <div style={{display:'flex',flexDirection:'column',gap:8}}>
-      {kezelesek.map(k=>(
+      {kezelesek.map(k=>{
+        const koltseg = becsultKoltseg(k.kezeloanyagok, k.mennyiseg, k.mertekegyseg);
+        return (
         <div key={k.id} style={{padding:'12px 16px',background:'var(--paper)',border:'1px solid var(--line)',borderRadius:8,display:'flex',gap:14}}>
           <div className="mono" style={{fontSize:12,color:'var(--ink-soft)',minWidth:78}}>{fmtDate(k.datum)}</div>
           <div style={{flex:1}}>
             <div style={{fontWeight:700,fontSize:14}}>{k.tipus} {k.stadium_nev && <span style={{color:'var(--ink-soft)',fontWeight:500}}>· {k.stadium_nev}</span>}</div>
             <div style={{fontSize:13,color:'var(--ink-soft)',marginTop:2}}>
               {(k.kezeloanyagok && k.kezeloanyagok.nev) && `${k.kezeloanyagok.nev} — ${k.mennyiseg||''} ${k.mertekegyseg||''}`}
+              {koltseg && <span className="mono" style={{color:'var(--leaf)',fontWeight:600}}> · ≈ {koltseg.osszeg.toFixed(0)} {koltseg.penznem}</span>}
             </div>
             {k.megjegyzes && <div style={{fontSize:13,marginTop:2}}>{k.megjegyzes}</div>}
             {k.vegezte && <div style={{fontSize:11.5,color:'var(--ink-soft)',marginTop:3}}>Végezte: {k.vegezte}</div>}
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -1836,6 +1840,12 @@ function KezeloanyagokNezet({kezeloanyagok,onReload}){
                   <div>
                     <div style={{fontWeight:600,fontSize:14}}>{k.nev}</div>
                     {k.mertekegyseg && <div className="mono" style={{fontSize:12,color:'var(--ink-soft)',marginTop:2}}>Mértékegység: {k.mertekegyseg}</div>}
+                    {(k.kiszereles_mennyiseg!=null && k.kiszereles_ar!=null) && (
+                      <div className="mono" style={{fontSize:12,color:'var(--leaf)',marginTop:2}}>
+                        {k.kiszereles_mennyiseg} {k.kiszereles_egyseg} = {k.kiszereles_ar} {k.penznem||'Ft'}
+                        {' '}({(k.kiszereles_ar/k.kiszereles_mennyiseg).toFixed(2)} {k.penznem||'Ft'}/{k.kiszereles_egyseg})
+                      </div>
+                    )}
                     {k.megjegyzes && <div style={{fontSize:12.5,color:'var(--ink-soft)',marginTop:2}}>{k.megjegyzes}</div>}
                   </div>
                   <div style={{display:'flex',gap:6,flexShrink:0}}>
@@ -1870,26 +1880,38 @@ function KezeloanyagokNezet({kezeloanyagok,onReload}){
 function KezeloanyagModal({kezeloanyag,onClose,onSaved}){
   const szerkesztes = !!kezeloanyag;
   const [form,setForm] = useState(szerkesztes ? {
-    nev: kezeloanyag.nev||'', kategoria: kezeloanyag.kategoria||'', mertekegyseg: kezeloanyag.mertekegyseg||'', megjegyzes: kezeloanyag.megjegyzes||''
-  } : {nev:'',kategoria:'',mertekegyseg:'',megjegyzes:''});
+    nev: kezeloanyag.nev||'', kategoria: kezeloanyag.kategoria||'', mertekegyseg: kezeloanyag.mertekegyseg||'', megjegyzes: kezeloanyag.megjegyzes||'',
+    kiszereles_mennyiseg: kezeloanyag.kiszereles_mennyiseg!=null?String(kezeloanyag.kiszereles_mennyiseg):'',
+    kiszereles_egyseg: kezeloanyag.kiszereles_egyseg||'', kiszereles_ar: kezeloanyag.kiszereles_ar!=null?String(kezeloanyag.kiszereles_ar):'',
+    penznem: kezeloanyag.penznem||'Ft'
+  } : {nev:'',kategoria:'',mertekegyseg:'',megjegyzes:'',kiszereles_mennyiseg:'',kiszereles_egyseg:'',kiszereles_ar:'',penznem:'Ft'});
   const [mentes,setMentes] = useState(false);
   const [hiba,setHiba] = useState('');
 
   const mertekegysegek = ['g/hl','ml/hl','kg/hl','g','ml','kg','l','db','%'];
   const kategoriak = ['Kénezés','Derítés','Enzim','Élesztő','Élesztő tápanyag','Savkorrekció','Cukrozás','MLF','Mikrobiológiai stabilizálás','Egyéb'];
+  const kiszerelesEgysegek = ['g','kg','ml','l','db'];
+  const penznemek = ['Ft','€','$'];
+
+  const egysegArSzamolt = (form.kiszereles_mennyiseg && form.kiszereles_ar)
+    ? (parseFloat(form.kiszereles_ar) / parseFloat(form.kiszereles_mennyiseg))
+    : null;
 
   const submit = async ()=>{
     if(!form.nev) return;
     setMentes(true);
     setHiba('');
+    const mezok = {
+      nev: form.nev, kategoria: form.kategoria||null, mertekegyseg: form.mertekegyseg||null, megjegyzes: form.megjegyzes||null,
+      kiszereles_mennyiseg: form.kiszereles_mennyiseg? parseFloat(form.kiszereles_mennyiseg): null,
+      kiszereles_egyseg: form.kiszereles_egyseg||null,
+      kiszereles_ar: form.kiszereles_ar? parseFloat(form.kiszereles_ar): null,
+      penznem: form.penznem||'Ft'
+    };
     if(szerkesztes){
-      await sbUpdate('kezeloanyagok', kezeloanyag.id, {
-        nev: form.nev, kategoria: form.kategoria||null, mertekegyseg: form.mertekegyseg||null, megjegyzes: form.megjegyzes||null
-      });
+      await sbUpdate('kezeloanyagok', kezeloanyag.id, mezok);
     } else {
-      const eredmeny = await sbInsert('kezeloanyagok', {
-        nev: form.nev, kategoria: form.kategoria||null, mertekegyseg: form.mertekegyseg||null, megjegyzes: form.megjegyzes||null
-      });
+      const eredmeny = await sbInsert('kezeloanyagok', mezok);
       if(!eredmeny){ setHiba('Mentés sikertelen — lehet, hogy már létezik ilyen nevű anyag.'); setMentes(false); return; }
     }
     setMentes(false);
@@ -1907,14 +1929,45 @@ function KezeloanyagModal({kezeloanyag,onClose,onSaved}){
           {kategoriak.map(k=><option key={k} value={k} />)}
         </datalist>
       </Field>
-      <Field label="Mértékegység">
+      <Field label="Mértékegység (kezeléshez)">
         <input style={inputStyle} list="mertekegyseg-lista" placeholder="pl. g/hl" value={form.mertekegyseg} onChange={e=>setForm({...form,mertekegyseg:e.target.value})} />
         <datalist id="mertekegyseg-lista">
           {mertekegysegek.map(m=><option key={m} value={m} />)}
         </datalist>
       </Field>
+
+      <div style={{borderTop:'1px dashed var(--line)', marginTop:14, paddingTop:14}}>
+        <div style={{fontSize:11.5,textTransform:'uppercase',letterSpacing:'.04em',color:'var(--ink-soft)',marginBottom:10}}>Kiszerelés és ár (opcionális)</div>
+        <div style={{display:'flex',gap:10}}>
+          <Field label="Kiszerelés mennyisége">
+            <input type="number" step="any" style={inputStyle} placeholder="pl. 500" value={form.kiszereles_mennyiseg} onChange={e=>setForm({...form,kiszereles_mennyiseg:e.target.value})} />
+          </Field>
+          <Field label="Egysége">
+            <select style={inputStyle} value={form.kiszereles_egyseg} onChange={e=>setForm({...form,kiszereles_egyseg:e.target.value})}>
+              <option value="">—</option>
+              {kiszerelesEgysegek.map(e=><option key={e} value={e}>{e}</option>)}
+            </select>
+          </Field>
+        </div>
+        <div style={{display:'flex',gap:10}}>
+          <Field label="Kiszerelés ára">
+            <input type="number" step="any" style={inputStyle} placeholder="pl. 4500" value={form.kiszereles_ar} onChange={e=>setForm({...form,kiszereles_ar:e.target.value})} />
+          </Field>
+          <Field label="Pénznem">
+            <select style={inputStyle} value={form.penznem} onChange={e=>setForm({...form,penznem:e.target.value})}>
+              {penznemek.map(p=><option key={p} value={p}>{p}</option>)}
+            </select>
+          </Field>
+        </div>
+        {egysegArSzamolt!=null && (
+          <div className="mono" style={{fontSize:12.5,color:'var(--ink-soft)',marginTop:4}}>
+            Számolt egységár: {egysegArSzamolt.toFixed(2)} {form.penznem} / {form.kiszereles_egyseg||'egység'}
+          </div>
+        )}
+      </div>
+
       <Field label="Megjegyzés (opcionális)">
-        <textarea style={{...inputStyle,minHeight:50,resize:'vertical'}} value={form.megjegyzes} onChange={e=>setForm({...form,megjegyzes:e.target.value})} />
+        <textarea style={{...inputStyle,minHeight:50,resize:'vertical',marginTop:14}} value={form.megjegyzes} onChange={e=>setForm({...form,megjegyzes:e.target.value})} />
       </Field>
       {hiba && <div style={{fontSize:13,color:'var(--wine)',marginBottom:14}}>{hiba}</div>}
       <button onClick={submit} disabled={mentes || !form.nev} style={primaryBtn(mentes || !form.nev)}>
@@ -1922,6 +1975,23 @@ function KezeloanyagModal({kezeloanyag,onClose,onSaved}){
       </button>
     </ModalShell>
   );
+}
+
+// ============================================================
+// KÖLTSÉG-SZÁMÍTÁS SEGÉDFÜGGVÉNY
+// ============================================================
+function becsultKoltseg(kezeloanyag, mennyiseg, kezelesMertekegyseg){
+  if(!kezeloanyag || mennyiseg==null || mennyiseg==='') return null;
+  if(kezeloanyag.kiszereles_mennyiseg==null || kezeloanyag.kiszereles_ar==null) return null;
+  const egysegAr = kezeloanyag.kiszereles_ar / kezeloanyag.kiszereles_mennyiseg; // ár / kiszerelés-egység (pl. Ft/g)
+  // Egyszerűsítés: ha a kezelés mértékegysége (pl. g/hl) tartalmazza a kiszerelés egységét (pl. g), 1:1 arányt veszünk a mennyiségi számhoz.
+  // Ez egy közelítő becslés, nem pontos hl-es átszámítás, mert a tétel mennyisége (hl) itt nem ismert minden esetben.
+  return {
+    osszeg: egysegAr * parseFloat(mennyiseg),
+    penznem: kezeloanyag.penznem || 'Ft',
+    egysegAr,
+    kiszerelesEgyseg: kezeloanyag.kiszereles_egyseg
+  };
 }
 
 // ============================================================
@@ -2004,7 +2074,7 @@ function ProtokollSzerkeszto({protokollId,kezeloanyagok,tetelek,onVissza,onReloa
       sbSelect('protokoll_fazisok', `select=*&protokoll_id=eq.${protokollId}&order=sorrend.asc`),
       sbSelect('protokoll_parameterek', `select=*&order=sorrend.asc`),
       sbSelect('protokoll_analitikak', `select=*`),
-      sbSelect('protokoll_kezelesek', `select=*,kezeloanyagok(nev,kategoria,mertekegyseg)&order=sorrend.asc`)
+      sbSelect('protokoll_kezelesek', `select=*,kezeloanyagok(nev,kategoria,mertekegyseg,kiszereles_mennyiseg,kiszereles_egyseg,kiszereles_ar,penznem)&order=sorrend.asc`)
     ]);
     if(protArr && protArr[0]) setProtokoll(protArr[0]);
     const fzk = fazisArr || [];
@@ -2374,16 +2444,24 @@ function KezelesSor({kezeles,kezeloanyagok,onFrissit,onTorles}){
     timer.current = setTimeout(()=> onFrissit({[mezo]: mezo==='mennyiseg' ? (v===''?null:parseFloat(v)) : (v||null)}), 500);
   };
 
+  const valasztottAnyag = kezeloanyagok.find(k=>k.id===kezeloanyagId);
+  const koltseg = becsultKoltseg(valasztottAnyag, mennyiseg, mertekegyseg);
+
   return (
-    <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:6,flexWrap:'wrap'}}>
-      <select value={kezeloanyagId} onChange={e=>valasztValt(e.target.value)} style={{...inputStyle,flex:'1.6 1 140px',fontSize:12.5}}>
-        <option value="">— válassz kezelőanyagot —</option>
-        {kezeloanyagok.map(k=><option key={k.id} value={k.id}>{k.nev}</option>)}
-      </select>
-      <input value={mennyiseg} onChange={e=>debounced('mennyiseg',e.target.value,setMennyiseg)} placeholder="Menny." style={{...inputStyle,flex:'0.6 1 60px',fontSize:12.5}} />
-      <input value={mertekegyseg} onChange={e=>debounced('mertekegyseg',e.target.value,setMertekegyseg)} placeholder="Mértékegys." style={{...inputStyle,flex:'0.7 1 70px',fontSize:12.5}} />
-      <input value={megjegyzes} onChange={e=>debounced('megjegyzes',e.target.value,setMegjegyzes)} placeholder="Megjegyzés" style={{...inputStyle,flex:'1.4 1 100px',fontSize:12.5}} />
-      <span onClick={onTorles} style={{color:'var(--ink-soft)',cursor:'pointer',fontSize:14,padding:'0 4px'}}>✕</span>
+    <div style={{display:'flex',flexDirection:'column',gap:2,marginBottom:6}}>
+      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+        <select value={kezeloanyagId} onChange={e=>valasztValt(e.target.value)} style={{...inputStyle,flex:'1.6 1 140px',fontSize:12.5}}>
+          <option value="">— válassz kezelőanyagot —</option>
+          {kezeloanyagok.map(k=><option key={k.id} value={k.id}>{k.nev}</option>)}
+        </select>
+        <input value={mennyiseg} onChange={e=>debounced('mennyiseg',e.target.value,setMennyiseg)} placeholder="Menny." style={{...inputStyle,flex:'0.6 1 60px',fontSize:12.5}} />
+        <input value={mertekegyseg} onChange={e=>debounced('mertekegyseg',e.target.value,setMertekegyseg)} placeholder="Mértékegys." style={{...inputStyle,flex:'0.7 1 70px',fontSize:12.5}} />
+        <input value={megjegyzes} onChange={e=>debounced('megjegyzes',e.target.value,setMegjegyzes)} placeholder="Megjegyzés" style={{...inputStyle,flex:'1.4 1 100px',fontSize:12.5}} />
+        <span onClick={onTorles} style={{color:'var(--ink-soft)',cursor:'pointer',fontSize:14,padding:'0 4px'}}>✕</span>
+      </div>
+      {koltseg && (
+        <div className="mono" style={{fontSize:11.5,color:'var(--leaf)',paddingLeft:2}}>≈ {koltseg.osszeg.toFixed(0)} {koltseg.penznem}</div>
+      )}
     </div>
   );
 }
